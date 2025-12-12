@@ -51,6 +51,7 @@ def persist_pipeline_result(
     )
     entry["pdf_path"] = str(result.pdf_path)
     records = entry.setdefault("records", {})
-    records[result.model] = result.serialize()
+    record_key = f"{result.provider}:{result.model}"
+    records[record_key] = result.serialize()
     save_store(store, store_path)
-    return f"{pdf_hash}:{result.model}"
+    return f"{pdf_hash}:{record_key}"

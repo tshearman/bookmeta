@@ -84,7 +84,7 @@ if __name__ == "__main__":
         ],
         isbn_identifiers=["9781234567897"],
         isbn_confidence=1.0,
-        cover_ocr="Sample transcription of key text visible on the cover.",
+        model_ocr="Sample transcription of key text visible on the cover.",
     )
 
     output_pdf = sample_pdf  # .with_stem(f"{sample_pdf.stem}_augmented")

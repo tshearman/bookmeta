@@ -7,7 +7,7 @@ import logging
 from google_books_volume import GoogleBooksVolume
 
 
-GOOGLE_BOOKS_MEMORY = Memory(location=".cache/openai_google_books", verbose=0)
+GOOGLE_BOOKS_MEMORY = Memory(location=".cache/bookmeta", verbose=0)
 
 
 class GoogleBooksQuery(BaseModel):

@@ -2,7 +2,7 @@ import json
 import logging
 import shutil
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Optional, List
 
@@ -21,7 +21,10 @@ from book_info_extractor import (
 from pdf_processor import process_pdf_for_openai_inputs
 
 
-PIPELINE_MEMORY = Memory(location=".cache/openai_google_books", verbose=0)
+BASE_DIR = Path(__file__).resolve().parent
+PIPELINE_CACHE_DIR = BASE_DIR / ".cache/bookmeta"
+PIPELINE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+PIPELINE_MEMORY = Memory(location=str(PIPELINE_CACHE_DIR), verbose=0)
 
 
 @dataclass
@@ -29,6 +32,7 @@ class PipelineResult:
     pdf_path: Path
     pdf_hash: str
     model: str
+    provider: str
     book_info: Optional[BookInfo]
     query: Optional[GoogleBooksQuery]
     volumes: List[GoogleBooksVolume]
@@ -40,7 +44,8 @@ class PipelineResult:
             "pdf_path": str(self.pdf_path),
             "pdf_hash": self.pdf_hash,
             "model": self.model,
-            "book_info": asdict(self.book_info) if self.book_info else None,
+            "provider": self.provider,
+            "book_info": _bookinfo_dict(self.book_info),
             "query": self.query.model_dump() if self.query else None,
             "volumes": [vol.raw if vol.raw else {} for vol in self.volumes],
             "ranking": (
@@ -59,18 +64,27 @@ class PipelineResult:
         }
 
 
+def _bookinfo_dict(book: Optional[BookInfo]) -> Optional[dict]:
+    if book is None:
+        return None
+    return {field.name: getattr(book, field.name, None) for field in fields(BookInfo)}
+
+
 @PIPELINE_MEMORY.cache(ignore=["client", "google_books_api_key"])
 def run_pipeline(
     pdf_path: Path,
     model: str,
-    client: OpenAI,
+    client: OpenAI | None,
     google_books_api_key: str,
     base_dir: Path | None = None,
+    provider: str = "openai",
 ) -> PipelineResult:
     if not pdf_path.exists():
         raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
-    logging.info("Starting pipeline for %s using model %s", pdf_path, model)
+    logging.info(
+        "Starting pipeline for %s using model %s via %s", pdf_path, model, provider
+    )
 
     pdf_hash = compute_pdf_hash(pdf_path)
     book_info: Optional[BookInfo] = None
@@ -91,7 +105,9 @@ def run_pipeline(
         relative_context = None
         if base_dir:
             try:
-                relative_context = str(Path(pdf_path).resolve().relative_to(base_dir.resolve()))
+                relative_context = str(
+                    Path(pdf_path).resolve().relative_to(base_dir.resolve())
+                )
             except ValueError:
                 relative_context = str(Path(pdf_path).resolve())
         else:
@@ -102,6 +118,7 @@ def run_pipeline(
             client=client,
             model=model,
             context_path=relative_context,
+            provider=provider,
         )
         query = bookinfo_to_google_books_query(book_info)
 
@@ -115,6 +132,7 @@ def run_pipeline(
             client=client,
             model=model,
             context_path=relative_context,
+            provider=provider,
         )
 
     logging.info("Pipeline complete")
@@ -158,6 +176,7 @@ def run_pipeline(
         pdf_path=pdf_path,
         pdf_hash=pdf_hash,
         model=model,
+        provider=provider,
         book_info=book_info,
         query=query,
         volumes=volumes,
@@ -169,21 +188,19 @@ def run_pipeline(
 def invalidate_pipeline_cache_entry(
     pdf_path: Path,
     model: str,
-    client: OpenAI,
+    client: OpenAI | None,
     google_books_api_key: str,
+    base_dir: Path | None = None,
+    provider: str = "openai",
 ) -> bool:
     """
     Remove the cached result for a specific pipeline call.
     Returns True if a cache entry was removed.
     """
     args_id = run_pipeline._get_args_id(
-        pdf_path, model, client, google_books_api_key
+        pdf_path, model, client, google_books_api_key, base_dir, provider
     )
-    func_path = (
-        Path(PIPELINE_MEMORY.location)
-        / "joblib"
-        / Path(run_pipeline.func_id)
-    )
+    func_path = Path(PIPELINE_MEMORY.location) / "joblib" / Path(run_pipeline.func_id)
     target = func_path / args_id
     if target.exists():
         shutil.rmtree(target)

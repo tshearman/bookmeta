@@ -1,18 +1,25 @@
 import base64
-from pydantic.dataclasses import dataclass
 import json
+import logging
 import mimetypes
 import tempfile
 from pathlib import Path
+
 from joblib import Memory
 from openai import OpenAI
-import logging
+from pydantic.dataclasses import dataclass
 
 from google_books import GoogleBooksQuery
 from pdf_processor import PdfProcessingResult, process_pdf_for_openai_inputs
+from ollama_client import (
+    get_ollama_client,
+    prepare_ollama_images,
+    resolve_ollama_model,
+)
 
 
-CACHE_DIR = Path(__file__).resolve().parent / ".cache/openai_google_books"
+BASE_DIR = Path(__file__).resolve().parent
+CACHE_DIR = BASE_DIR / ".cache/bookmeta"
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 memory = Memory(location=str(CACHE_DIR), verbose=0)
 
@@ -27,9 +34,9 @@ class BookInfo:
     publisher_confidence: float
     subject: str | None
     keywords: list[str] | None
-    isbn_identifiers: list[str] | None
-    isbn_confidence: float
-    cover_ocr: str | None = None
+    isbn_identifiers: list[str] | None = None
+    isbn_confidence: float = 0.0
+    model_ocr: str | None = None
 
 
 def image_path_to_data_url(path: str) -> str:
@@ -60,7 +67,7 @@ and "TESSERACT OCR". Using only information visible in these sources:
 • Populate the tags field with a list of strings, up to but no more
   than 8. These should be tags that describe information about the book
   like genre, subject, if its a game, and other high-level metadata
-• Provide `cover_ocr`: a concise transcription/summary of the readable text you
+• Provide `model_ocr`: a concise transcription/summary of the readable text you
   can infer from the images and OCR excerpts (do not just echo the provided OCR
   but use the provided OCR as context).
 
@@ -117,7 +124,7 @@ def construct_content_blocks(
 
 
 @memory.cache(ignore=["client"])
-def openai_api_request(content_blocks, model, client):
+def _openai_bookinfo_request(content_blocks, model, client):
     logging.debug("::: EXECUTING OPENAI API REQUEST :::")
     response = client.responses.parse(
         model=model,
@@ -132,18 +139,89 @@ def openai_api_request(content_blocks, model, client):
     return response.output_parsed
 
 
+@memory.cache()
+def _ollama_bookinfo_request(prompt_text: str, images: list[str], model: str) -> BookInfo:
+    logging.debug("::: EXECUTING OLLAMA BOOKINFO REQUEST :::")
+    schema_text = json.dumps(
+        {
+            "type": "object",
+            "properties": {
+                "author": {"type": "string"},
+                "author_confidence": {"type": "number"},
+                "title": {"type": "string"},
+                "title_confidence": {"type": "number"},
+                "publisher": {"type": ["string", "null"]},
+                "publisher_confidence": {"type": "number"},
+                "subject": {"type": ["string", "null"]},
+                "keywords": {"type": ["array", "null"], "items": {"type": "string"}},
+                "isbn_identifiers": {
+                    "type": ["array", "null"],
+                    "items": {"type": "string"},
+                },
+                "isbn_confidence": {"type": "number"},
+                "model_ocr": {"type": ["string", "null"]},
+            },
+            "required": [
+                "author",
+                "author_confidence",
+                "title",
+                "title_confidence",
+                "publisher_confidence",
+                "isbn_confidence",
+            ],
+        }
+    )
+    prompt = (
+        f"{prompt_text}\n\nSchema:\n{schema_text}\n"
+        "Respond ONLY with JSON matching this schema."
+    )
+    message: dict = {"role": "user", "content": prompt}
+    encoded_images = prepare_ollama_images(images)
+    if encoded_images:
+        message["images"] = encoded_images
+    client = get_ollama_client()
+    response = client.chat(
+        model=resolve_ollama_model(model),
+        messages=[message],
+    )
+    response_text = response.get("message", {}).get("content", "").strip()
+    if not response_text:
+        raise RuntimeError("Ollama response did not include any content")
+    try:
+        parsed = json.loads(response_text)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Ollama response not valid JSON") from exc
+    return BookInfo(**parsed)
+
+
+def _content_blocks_to_text_and_images(content_blocks: list[dict[str, str]]):
+    texts: list[str] = []
+    images: list[str] = []
+    for block in content_blocks:
+        if block["type"] == "input_text":
+            texts.append(block["text"])
+        elif block["type"] == "input_image":
+            images.append(block["image_url"])
+    return "\n\n".join(texts), images
+
+
 def extract_bookinfo_via_model(
     pdf_result: PdfProcessingResult,
-    client,
+    client: OpenAI | None,
     model: str = "gpt-4.1-mini",
     context_path: str | None = None,
+    provider: str = "openai",
 ) -> BookInfo:
     """
     Build an OpenAI request from the rendered pages + OCR output of a PDF.
     """
     content_blocks = construct_content_blocks(pdf_result, context_path=context_path)
-    response = openai_api_request(content_blocks, model, client)
-    return response
+    if provider == "ollama":
+        prompt_text, images = _content_blocks_to_text_and_images(content_blocks)
+        return _ollama_bookinfo_request(prompt_text, images, model)
+    if client is None:
+        raise ValueError("OpenAI client is required when provider='openai'")
+    return _openai_bookinfo_request(content_blocks, model, client)
 
 
 def bookinfo_to_google_books_query(book: BookInfo) -> GoogleBooksQuery:
@@ -168,16 +246,17 @@ def bookinfo_to_google_books_query(book: BookInfo) -> GoogleBooksQuery:
         inpublisher=book.publisher,
         subject=book.subject,
         isbn=isbn_value,
-        isbn_confidence=0.8 if isbn_value else 0.0,
+        isbn_confidence=book.isbn_confidence if isbn_value else 0.0,
         tags=book.keywords,
     )
 
 
 def extract_google_books_query_from_pdf_result(
     pdf_result: PdfProcessingResult,
-    client,
+    client: OpenAI | None,
     model: str = "gpt-4.1-mini",
     context_path: str | None = None,
+    provider: str = "openai",
 ) -> GoogleBooksQuery:
     """
     Convenience wrapper: run the BookInfo extraction and convert to GoogleBooksQuery.
@@ -187,6 +266,7 @@ def extract_google_books_query_from_pdf_result(
         client=client,
         model=model,
         context_path=context_path,
+        provider=provider,
     )
     return bookinfo_to_google_books_query(book)
 
