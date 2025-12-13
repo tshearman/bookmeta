@@ -9,7 +9,6 @@ from data_store import persist_pipeline_result
 from pipeline import (
     run_pipeline,
     PipelineResult,
-    invalidate_pipeline_cache_entry,
 )
 
 
@@ -94,26 +93,6 @@ def main():
     logging.info("Starting app")
 
     client, google_key = load_credentials(args.secrets_path, args.provider)
-    if args.invalidate_cache:
-        logging.info(
-            "Invalidating cached result for pdf=%s model=%s provider=%s",
-            args.pdf_path,
-            args.model,
-            args.provider,
-        )
-        removed = invalidate_pipeline_cache_entry(
-            pdf_path=args.pdf_path,
-            model=args.model,
-            client=client,
-            google_books_api_key=google_key,
-            base_dir=args.base_dir,
-            provider=args.provider,
-        )
-        if removed:
-            logging.info("Cache entry removed; fresh pipeline run will occur")
-        else:
-            logging.info("No existing cache entry found for this combination")
-
     result: PipelineResult = run_pipeline(
         pdf_path=args.pdf_path,
         model=args.model,
