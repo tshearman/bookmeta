@@ -17,7 +17,7 @@ class GoogleBooksQueryParams:
         if not value:
             return None
         cleaned = value.strip()
-        return f"+{keyword}:{cleaned}" if cleaned else None
+        return f"{keyword}:{cleaned}" if cleaned else None
 
     @property
     def query_params(self) -> dict[str, Any]:

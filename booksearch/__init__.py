@@ -1,6 +1,5 @@
-from typing import Any, Callable
-from datamodel.book_info import BookInfo
+from typing import Callable
 from datamodel.book_info_response import BookInfoResponse
 
 
-BookSearchPipeline = Callable[[BookInfoResponse], list[BookInfo]]
+BookSearchMethod = Callable[[BookInfoResponse], str | None]

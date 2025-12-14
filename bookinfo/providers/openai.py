@@ -27,14 +27,8 @@ def openai_bookinfo_request(client: OpenAI, model: str) -> BookInfoRequestPipeli
     def run(input: PdfOcrResults) -> BookInfoResponse | None:
         blocks = construct_blocks(input, BOOK_PROMPT)
         context = blocks_to_openai_context(blocks)
-        out = cached_openapi_response_parsed(
-            model, context, client, text_format=BookInfo
+        return cached_openapi_response_parsed(
+            model, context, client, text_format=BookInfoResponse
         )
-        # return client.responses.parse(
-        #     model=model,
-        #     input=context,  # type: ignore
-        #     text_format=BookInfo,
-        # ).output_parsed
-        return out
 
     return run
