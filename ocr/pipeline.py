@@ -1,4 +1,6 @@
 import json
+import logging
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Protocol, Sequence, cast
 import ollama
@@ -6,7 +8,7 @@ from openai import OpenAI
 from pydantic.dataclasses import dataclass
 import fitz
 
-from bookinfo import DEFAULT_OLLAMA_HOST, DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_MODEL
+from bookinfo import DEFAULT_OPENAI_MODEL
 from datamodel.img_ocr_result import OcrResult
 from datamodel.pdf_ocr_results import OCRedPage, PdfOcrResults, build_combined_ocr_text
 from ocr.metadata import load_pdf_metadata
@@ -19,6 +21,14 @@ from ocr.ocr import (
 )
 from ocr.rendering import page_to_image
 from ocr.sampling import sample_page_indices
+
+
+LOGGER = logging.getLogger("ocr.pipeline")
+
+
+def _log_info(message: str) -> None:
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    LOGGER.info("[OCRPipeline %s] %s", timestamp, message)
 
 
 OcrPipeline = Callable[[str | Path], PdfOcrResults]
@@ -84,6 +94,10 @@ def generate_pipeline(config: OcrPipelineConfig) -> OcrPipeline:
 
 
 if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(levelname)s %(message)s",
+    )
     sample_pdf = (
         Path(__file__).resolve().parents[1]
         / "resources"
@@ -94,43 +108,43 @@ if __name__ == "__main__":
     if not sample_pdf.exists():
         raise FileNotFoundError(f"Sample PDF not found: {sample_pdf}")
 
-    ollama_client = ollama.Client(host=DEFAULT_OLLAMA_HOST)
     with open("secrets.json", "r") as f:
         secrets = json.load(f)
     OPENAI_API_KEY = secrets["OPENAI_API_KEY"]
     OPENAI_PROJECT_ID = secrets["OPENAI_PROJECT_ID"]
+    OLLAMA_HOST = secrets["OLLAMA_HOST"]
+    ollama_client = ollama.Client(host=OLLAMA_HOST)
     openai_client = OpenAI(api_key=OPENAI_API_KEY, project=OPENAI_PROJECT_ID)
 
     methods = (
         native_ocr_method,
         tesseract_ocr_method,
-        ollama_ocr_method(client=ollama_client, model=DEFAULT_OLLAMA_MODEL),
-        ollama_ocr_method(client=ollama_client, model="qwen3-vl:32b"),
-        # openai_ocr_method(client=openai_client, model=DEFAULT_OPENAI_MODEL),
+        ollama_ocr_method(client=ollama_client, model="qwen3-vl:8b"),
+        openai_ocr_method(client=openai_client, model=DEFAULT_OPENAI_MODEL),
     )
-    config = OcrPipelineConfig(ocr_methods=methods)
+    config = OcrPipelineConfig(ocr_methods=methods, num_first_pages=2, num_last_pages=0)
     pipeline = generate_pipeline(config)
     results = pipeline(sample_pdf)
 
     combined_len = len(results.combined_text or "")
     sampled_pages = len(results.ocr_results)
-    print(
+    _log_info(
         f"OCR complete for {sample_pdf.name}: "
         f"{sampled_pages} sampled pages, {combined_len} characters of text."
     )
 
-    print("\nMetadata")
+    _log_info("Metadata")
     if results.metadata:
         for key, value in results.metadata.items():
-            print(f"  {key}: {value or '<empty>'}")
+            _log_info(f"  {key}: {value or '<empty>'}")
     else:
-        print("  <none>")
+        _log_info("  <none>")
 
-    print("\nSampled page summaries")
+    _log_info("Sampled page summaries")
     for page in results.ocr_results:
-        print(f"  Page {page.page_number}")
+        _log_info(f"  Page {page.page_number}")
         if not page.ocr_results:
-            print("    <no OCR results>")
+            _log_info("    <no OCR results>")
             continue
 
         for ocr_result in page.ocr_results:
@@ -138,4 +152,4 @@ if __name__ == "__main__":
             if len(snippet) > 160:
                 snippet = snippet[:157] + "..."
             snippet = snippet or "<no text>"
-            print(f"    {ocr_result.method}: {snippet}")
+            _log_info(f"    {ocr_result.method}: {snippet}")

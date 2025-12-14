@@ -5,6 +5,11 @@ import ollama
 from openai import OpenAI
 import pytesseract
 from datamodel.img_ocr_result import OcrResult
+from llm import (
+    cached_ollama_chat,
+    cached_openapi_response_text,
+    cached_pytesseract_image_to_string,
+)
 from ocr import OCR_LLM_PROMPT
 from .rendering import img_to_b64, img_to_url, page_to_image
 
@@ -20,7 +25,7 @@ def native_ocr_method(page: fitz.Page) -> OcrResult | None:
 def tesseract_ocr_method(page: fitz.Page) -> OcrResult | None:
     lang: str = "eng"
     img = page_to_image(page, grayscale=True)
-    ocr_text = (pytesseract.image_to_string(img, lang=lang) or "").strip()
+    ocr_text = (cached_pytesseract_image_to_string(img, lang) or "").strip()
     if ocr_text:
         return OcrResult(method="tesseract_ocr", text=ocr_text)
 
@@ -38,7 +43,7 @@ def ollama_ocr_method(client: ollama.Client, model) -> OcrMethod:
             )
         ]
 
-        response = client.chat(model=model, messages=messages)
+        response = cached_ollama_chat(model, messages, client)
         content = response["message"]["content"]
         return OcrResult(method=f"ollama:{model}", text=content)
 
@@ -52,7 +57,7 @@ def openai_ocr_method(client: OpenAI, model) -> OcrMethod:
         img_block = {"type": "input_image", "image_url": img_to_url(img)}
         prompt_block = {"type": "input_text", "text": OCR_LLM_PROMPT}
         context = [{"role": "user", "content": [prompt_block, img_block]}]
-        content = client.responses.parse(model=model, input=context).output_text  # type: ignore
-        return OcrResult(method=f"ollama:{model}", text=content)
+        content = cached_openapi_response_text(model, context, client)
+        return OcrResult(method=f"openai:{model}", text=content)
 
     return run

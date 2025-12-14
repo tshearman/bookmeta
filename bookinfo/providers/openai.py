@@ -7,6 +7,7 @@ from bookinfo.blocks import construct_blocks, get_img_blocks, get_text_blocks
 from datamodel.book_info import BookInfo
 from datamodel.book_info_response import BookInfoResponse
 from datamodel.pdf_ocr_results import PdfOcrResults
+from llm import cached_openapi_response_parsed
 from ocr.rendering import img_to_url
 
 
@@ -26,10 +27,14 @@ def openai_bookinfo_request(client: OpenAI, model: str) -> BookInfoRequestPipeli
     def run(input: PdfOcrResults) -> BookInfoResponse | None:
         blocks = construct_blocks(input, BOOK_PROMPT)
         context = blocks_to_openai_context(blocks)
-        return client.responses.parse(
-            model=model,
-            input=context,  # type: ignore
-            text_format=BookInfo,
-        ).output_parsed
+        out = cached_openapi_response_parsed(
+            model, context, client, text_format=BookInfo
+        )
+        # return client.responses.parse(
+        #     model=model,
+        #     input=context,  # type: ignore
+        #     text_format=BookInfo,
+        # ).output_parsed
+        return out
 
     return run
