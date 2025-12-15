@@ -1,179 +1,172 @@
+import argparse
 import json
 import logging
-from dataclasses import dataclass, fields
+from dataclasses import asdict, dataclass, is_dataclass
 from pathlib import Path
-from typing import Optional, List
-
-from joblib import Memory
-from openai import OpenAI
-
-from data_store import compute_pdf_hash
-from google_books import fetch_google_books
-from google_books_volume import GoogleBooksVolume
-from openai_rank_request import rank_google_books_candidates, Rank
-from datamodel import BookInfo, GoogleBooksQueryParams
-from book_info_extractor import (
-    bookinfo_to_google_books_query,
-    extract_bookinfo_via_model,
+from typing import Any, Callable
+from bookinfo.pipeline import (
+    BookInfoPipelineConfig,
+    generate_pipeline as generate_bookinfo_pipeline,
 )
-from transforms import process_pdf_for_openai_inputs
-
-
-BASE_DIR = Path(__file__).resolve().parent
-PIPELINE_CACHE_DIR = BASE_DIR / ".cache/bookmeta"
-PIPELINE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-PIPELINE_MEMORY = Memory(location=str(PIPELINE_CACHE_DIR), verbose=0)
+from booksearch.pipeline import (
+    BookSearchPipelineConfig,
+    generate_pipeline as generate_booksearch_pipeline,
+)
+from booksearch.providers.googlebooks import GoogleBooksClientConfig, googlebooks_search
+from datamodel.book_info import DetailedBookInfo
+from ocr.pipeline import OcrPipelineConfig, generate_pipeline as generate_ocr_pipeline
+from rank.pipeline import BookInfoSelectionPipelineConfig, generate_selection_pipeline
 
 
 @dataclass
-class PipelineResult:
-    pdf_path: Path
-    pdf_hash: str
-    model: str
-    provider: str
-    book_info: Optional[BookInfo]
-    query: Optional[GoogleBooksQueryParams]
-    volumes: List[GoogleBooksVolume]
-    ranking: Optional[Rank]
-    selected_volume: Optional[GoogleBooksVolume]
-
-    def serialize(self) -> dict:
-        return {
-            "pdf_path": str(self.pdf_path),
-            "pdf_hash": self.pdf_hash,
-            "model": self.model,
-            "provider": self.provider,
-            "book_info": _bookinfo_dict(self.book_info),
-            "query": self.query.model_dump() if self.query else None,
-            "volumes": [vol.raw if vol.raw else {} for vol in self.volumes],
-            "ranking": (
-                {
-                    "rank": self.ranking.rank,
-                    "confidence": self.ranking.confidence,
-                }
-                if self.ranking
-                else None
-            ),
-            "selected_volume": (
-                self.selected_volume.raw
-                if (self.selected_volume and self.selected_volume.raw)
-                else None
-            ),
-        }
+class PipelineConfig:
+    ocr_config: OcrPipelineConfig
+    extraction_config: BookInfoPipelineConfig
+    selection_config: BookInfoSelectionPipelineConfig
+    booksearch_config: BookSearchPipelineConfig
 
 
-def _bookinfo_dict(book: Optional[BookInfo]) -> Optional[dict]:
-    if book is None:
-        return None
-    return {field.name: getattr(book, field.name, None) for field in fields(BookInfo)}
+BookMetaPipeline = Callable[[Path], DetailedBookInfo]
 
 
-@PIPELINE_MEMORY.cache(ignore=["client", "google_books_api_key"])
-def run_pipeline(
-    pdf_path: Path,
-    model: str,
-    client: OpenAI | None,
-    google_books_api_key: str,
-    base_dir: Path | None = None,
-    provider: str = "openai",
-) -> PipelineResult:
-    if not pdf_path.exists():
-        raise FileNotFoundError(f"PDF not found: {pdf_path}")
-
-    logging.info(
-        "Starting pipeline for %s using model %s via %s", pdf_path, model, provider
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Process a PDF and produce refined book metadata."
     )
-
-    pdf_hash = compute_pdf_hash(pdf_path)
-    book_info: Optional[BookInfo] = None
-    query: Optional[GoogleBooksQueryParams] = None
-    volumes: List[GoogleBooksVolume] = []
-    ranking: Optional[Rank] = None
-    selected_volume: Optional[GoogleBooksVolume] = None
-
-    logging.info("Processing PDF for OCR inputs")
-    pdf_result = process_pdf_for_openai_inputs(
-        pdf_path=pdf_path,
-        max_long_edge=1200,
+    parser.add_argument("pdf_path", type=Path, help="Path to the input PDF.")
+    parser.add_argument(
+        "--secrets",
+        type=Path,
+        default=Path("secrets.json"),
+        help="Path to secrets JSON with API keys.",
     )
-
-    logging.info("Calling OpenAI to extract BookInfo")
-    relative_context = None
-    if base_dir:
-        try:
-            relative_context = str(Path(pdf_path).resolve().relative_to(base_dir.resolve()))
-        except ValueError:
-            relative_context = str(Path(pdf_path).resolve())
-    else:
-        relative_context = str(Path(pdf_path).resolve())
-
-    book_info = extract_bookinfo_via_model(
-        pdf_result=pdf_result,
-        client=client,
-        model=model,
-        context_path=relative_context,
-        provider=provider,
+    parser.add_argument(
+        "--num-front-ocr-pages",
+        type=int,
+        default=3,
+        help="Path to secrets JSON with API keys.",
     )
-    query = bookinfo_to_google_books_query(book_info)
-
-    logging.info("Fetching Google Books candidates")
-    volumes = fetch_google_books(query, key=google_books_api_key)
-    logging.info("Fetched %d Google Books candidates", len(volumes))
-
-    ranking = rank_google_books_candidates(
-        pdf_result=pdf_result,
-        volumes=volumes,
-        client=client,
-        model=model,
-        context_path=relative_context,
-        provider=provider,
+    parser.add_argument(
+        "--num-back-ocr-pages",
+        type=int,
+        default=2,
+        help="Path to secrets JSON with API keys.",
     )
-
-    logging.info("Pipeline complete")
-
-    if book_info:
-        logging.info("Extracted BookInfo: %s", book_info)
-    if query:
-        logging.info("Derived GoogleBooksQueryParams: %s", query.model_dump())
-
-    serialized_volumes = [vol.raw if vol.raw else {} for vol in volumes]
-    logging.debug(
-        "Raw Google Books responses: %s", json.dumps(serialized_volumes, indent=2)
+    parser.add_argument(
+        "--extraction-provider",
+        choices=("openai", "ollama"),
+        default="openai",
+        help="Provider for the initial BookInfo extraction stage.",
     )
+    parser.add_argument(
+        "--extraction-model",
+        default=None,
+        help="Optional model override for the BookInfo extraction stage.",
+    )
+    parser.add_argument(
+        "--selection-provider",
+        choices=("openai", "ollama"),
+        default="openai",
+        help="Provider for the BookInfo selection stage.",
+    )
+    parser.add_argument(
+        "--selection-model",
+        default=None,
+        help="Optional model override for the BookInfo selection stage.",
+    )
+    parser.add_argument(
+        "--google-max-results",
+        type=int,
+        default=3,
+        help="Maximum Google Books results to fetch during book search.",
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        help="Logging level (DEBUG, INFO, WARN, ERROR).",
+    )
+    return parser.parse_args()
 
-    if ranking is not None and ranking.rank > 0:
-        ranking_payload = {"rank": ranking.rank, "confidence": ranking.confidence}
-        logging.info("Ranking result: %s", ranking_payload)
-        if 0 < ranking.rank <= len(volumes):
-            selected_volume = volumes[ranking.rank - 1]
-            logging.info(
-                "Top candidate summary: title=%s authors=%s",
-                (
-                    selected_volume.volume_info.title
-                    if selected_volume.volume_info
-                    else "UNKNOWN"
-                ),
-                (
-                    ", ".join(selected_volume.volume_info.authors)
-                    if selected_volume.volume_info
-                    and selected_volume.volume_info.authors
-                    else "UNKNOWN"
-                ),
+
+def _read_secrets(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        raise FileNotFoundError(f"Secrets file not found: {path}")
+    with path.open("r") as fh:
+        return json.load(fh)
+
+
+def _client_config_for(provider: str, secrets: dict[str, Any]) -> dict[str, Any]:
+    if provider == "openai":
+        api_key = secrets.get("OPENAI_API_KEY")
+        project = secrets.get("OPENAI_PROJECT_ID")
+        return {"api_key": api_key, "project": project}
+    if provider == "ollama":
+        host = secrets.get("OLLAMA_HOST")
+        return {"host": host}
+    raise ValueError(f"Unsupported provider: {provider}")
+
+
+def build_pipeline_config(
+    args: argparse.Namespace, secrets: dict[str, Any]
+) -> PipelineConfig:
+
+    ocr_config = OcrPipelineConfig()
+    extraction_config = BookInfoPipelineConfig(
+        provider=args.extraction_provider,
+        client_config=_client_config_for(args.extraction_provider, secrets),
+        model=args.extraction_model,
+    )
+    selection_config = BookInfoSelectionPipelineConfig(
+        provider=args.selection_provider,
+        client_config=_client_config_for(args.selection_provider, secrets),
+        model=args.selection_model,
+    )
+    api_key = secrets["GOOGLE_BOOKS_API_KEY"]
+    methods = [
+        googlebooks_search(
+            GoogleBooksClientConfig(
+                api_key=api_key,
+                max_results=args.google_max_results,
             )
-    else:
-        logging.info("No ranking result available")
+        )
+    ]
+    booksearch_config = BookSearchPipelineConfig(search_methods=methods)
 
-    if book_info and query:
-        logging.info("Returning pipeline result for hash %s", pdf_hash)
-
-    return PipelineResult(
-        pdf_path=pdf_path,
-        pdf_hash=pdf_hash,
-        model=model,
-        provider=provider,
-        book_info=book_info,
-        query=query,
-        volumes=volumes,
-        ranking=ranking,
-        selected_volume=selected_volume,
+    return PipelineConfig(
+        ocr_config=ocr_config,
+        extraction_config=extraction_config,
+        selection_config=selection_config,
+        booksearch_config=booksearch_config,
     )
+
+
+def pipeline(config: PipelineConfig) -> BookMetaPipeline:
+    ocr_pipeline = generate_ocr_pipeline(config.ocr_config)
+    info_pipeline = generate_bookinfo_pipeline(config.extraction_config)
+    search_pipeline = generate_booksearch_pipeline(config.booksearch_config)
+    selection_pipeline = generate_selection_pipeline(config.selection_config)
+
+    def _inner_(pdf_path: Path) -> DetailedBookInfo:
+        ocr_results = ocr_pipeline(pdf_path)
+        search_results = search_pipeline(info_pipeline(ocr_results))
+        return selection_pipeline(ocr_results, search_results)
+
+    return _inner_
+
+
+def main():
+    args = parse_args()
+    logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
+    secrets = _read_secrets(args.secrets)
+    config = build_pipeline_config(args, secrets)
+    run_pipeline = pipeline(config)
+
+    logging.info("Running pipeline on %s", args.pdf_path)
+    final_info = run_pipeline(args.pdf_path)
+    logging.info("Final BookInfo:\n%s", final_info)
+    return final_info
+
+
+if __name__ == "__main__":
+    out = main()
+    print(json.dumps(out.model_dump(), indent=2))

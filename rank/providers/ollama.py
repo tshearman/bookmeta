@@ -1,41 +1,41 @@
-from pathlib import Path
+from typing import Sequence
+
 import ollama
-from bookinfo.blocks import construct_blocks
+
 from bookinfo.providers.ollama import blocks_to_imgs
-from datamodel.book_info import BookInfo
+from datamodel.book_info import DetailedBookInfo
 from datamodel.pdf_ocr_results import PdfOcrResults
-from rank import RANK_PROMPT, BookInfoRankPipeline, ScoredBookInfo, get_text_blocks
+from llm import cached_ollama_chat
+from rank import (
+    BookInfoSelectionPipeline,
+    BookSearchCandidate,
+    build_blocks_with_candidates,
+)
 
 
-def ollama_bookinfo_rank(client: ollama.Client, model: str) -> BookInfoRankPipeline:
-
-    def construct_rank_content_blocks(
-        ocr_results: PdfOcrResults,
-        candidates: list[BookInfo],
-        context_path: Path | None,
-    ) -> list[ollama.Message]:
-
-        blocks = construct_blocks(ocr_results, RANK_PROMPT, context_path)
-        content = "\n\n".join(b["text"] for b in get_text_blocks(blocks, candidates))
-        return [
+def ollama_selection_runner(
+    client: ollama.Client,
+    model: str,
+) -> BookInfoSelectionPipeline:
+    def run(
+        pdf_results: PdfOcrResults,
+        candidates: Sequence[BookSearchCandidate],
+    ) -> DetailedBookInfo | None:
+        blocks, text_blocks = build_blocks_with_candidates(pdf_results, candidates)
+        content = "\n\n".join(block["text"] for block in text_blocks)
+        messages = [
             ollama.Message(
                 role="user",
                 content=content,
                 images=blocks_to_imgs(blocks),  # type: ignore
             )
         ]
-
-    def run(
-        ocr_results: PdfOcrResults,
-        candidates: list[BookInfo],
-        context_path: Path | None = None,
-    ) -> ScoredBookInfo | None:
-        messages = construct_rank_content_blocks(ocr_results, candidates, context_path)
-        response = client.chat(
-            model=model,
-            messages=messages,
-            format=ScoredBookInfo.model_json_schema(),  # type: ignore
+        response = cached_ollama_chat(
+            model,
+            messages,
+            client,
+            format=DetailedBookInfo.model_json_schema(),  # type: ignore[arg-type]
         )
-        return ScoredBookInfo.model_validate_json(response["message"]["content"])
+        return DetailedBookInfo.model_validate_json(response["message"]["content"])
 
     return run

@@ -1,38 +1,32 @@
-from pathlib import Path
+from typing import Sequence
 import openai
-from bookinfo.blocks import construct_blocks, get_img_blocks
+from bookinfo.blocks import get_img_blocks
 from bookinfo.providers.openai import parse_img_block
-from datamodel.book_info import BookInfo
+from datamodel.book_info import DetailedBookInfo
 from datamodel.pdf_ocr_results import PdfOcrResults
-from rank import RANK_PROMPT, BookInfoRankPipeline, ScoredBookInfo
-from typing import List
+from llm import cached_openapi_response_parsed
+from rank import (
+    BookInfoSelectionPipeline,
+    BookSearchCandidate,
+    build_blocks_with_candidates,
+)
 
 
-def openai_bookinfo_rank(client: openai.OpenAI, model: str) -> BookInfoRankPipeline:
-
-    def construct_rank_content_blocks(
-        ocr_results: PdfOcrResults,
-        candidates: list[BookInfo],
-        context_path: Path | None,
-    ) -> list[dict]:
-        blocks = construct_blocks(ocr_results, RANK_PROMPT, context_path)
-        content_blocks = [blocks["prompt"]]
-        content_blocks.append(blocks["path"])
-        content_blocks.extend(
-            {"type": "input_text", "text": f"CANDIDATE BOOK\n {c.model_dump_json()}"} for c in candidates  # type: ignore
-        )
-        content_blocks.extend([parse_img_block(b) for b in get_img_blocks(blocks)])
-        content_blocks.extend(blocks["ocr"])
-        return content_blocks
-
+def openai_selection_runner(
+    client: openai.OpenAI, model: str
+) -> BookInfoSelectionPipeline:
     def run(
-        ocr_results: PdfOcrResults,
-        candidates: list[BookInfo],
-        context_path: Path | None = None,
-    ) -> ScoredBookInfo | None:
-        context = construct_rank_content_blocks(ocr_results, candidates, context_path)
-        return client.responses.parse(
-            model=model, input=context, text_format=ScoredBookInfo  # type: ignore
-        ).output_parsed
+        pdf_results: PdfOcrResults,
+        candidates: Sequence[BookSearchCandidate],
+    ) -> DetailedBookInfo | None:
+        blocks, text_blocks = build_blocks_with_candidates(pdf_results, candidates)
+        img_blocks = [parse_img_block(b) for b in get_img_blocks(blocks)]
+        context = [{"role": "user", "content": text_blocks + img_blocks}]
+        return cached_openapi_response_parsed(
+            model,
+            context,
+            client,
+            text_format=DetailedBookInfo,
+        )
 
-    return run
+    return run  # type: ignore

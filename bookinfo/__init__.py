@@ -5,7 +5,7 @@ from datamodel.pdf_ocr_results import PdfOcrResults
 
 Provider = Literal["ollama", "openai"]
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
-DEFAULT_OLLAMA_MODEL = "qwen3-vl:8b"
+DEFAULT_OLLAMA_MODEL = "qwen3-vl:30b"
 
 BOOK_PROMPT = """
 You are given images of a few pages of a book (front cover, back cover,
@@ -31,4 +31,4 @@ Return your best guess for any field you can see. If a field is not visible or
 uncertain, set it to null (and confidence near 0). Do NOT invent information.
 """
 
-BookInfoRequestPipeline = Callable[[PdfOcrResults], BookInfoResponse | None]
+BookInfoRequestPipeline = Callable[[PdfOcrResults], BookInfoResponse]
