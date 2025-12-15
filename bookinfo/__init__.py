@@ -5,7 +5,7 @@ from ocr.pdf_ocr_results import PdfOcrResults
 
 Provider = Literal["ollama", "openai"]
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
-DEFAULT_OLLAMA_MODEL = "qwen3-vl:30b"
+DEFAULT_OLLAMA_MODEL = "qwen2.5vl:32b"
 
 BOOK_PROMPT = """
 You are given images of a few pages of a book (front cover, back cover,

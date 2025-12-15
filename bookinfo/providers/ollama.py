@@ -25,7 +25,8 @@ class SimplifiedBookInfoSummary(BaseModel):
 
 
 OLLAMA_TITLE_AUTHOR_PROMPT = """
-You are analyzing images of a book's cover/interior plus OCR text excerpts.
+You are analyzing book cover/interior images and OCR excerpts.
+Use only the visible/provided text. Never invent or infer facts that are not explicitly present.
 
 Return ONLY a JSON object matching this schema:
 {
@@ -37,7 +38,15 @@ Return ONLY a JSON object matching this schema:
     "author_confidence": <0-1 confidence in the author>
 }
 
-If you cannot see a field, set it to null with confidence near 0. Do not add text outside the JSON.
+Guidance:
+- "keywords" Populate the keywords field with a list of strings, up to but no more
+  than 8. These should be keywords that describe information about the book
+  like genre, subject, if its a game, and other high-level metadata
+- "description" a concise transcription/summary of the readable text you
+  can infer from the images and OCR excerpts (do not just echo the provided OCR
+  but use the provided OCR as context).
+- If a field cannot be confirmed, set it to null and set the corresponding confidence near 0.
+- Do not add any text outside the JSON. Do not wrap the JSON in code fences.
 """
 
 
