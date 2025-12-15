@@ -17,7 +17,7 @@ def _pixmap_to_image(pix: fitz.Pixmap) -> Image.Image:
 
 
 def resize_image_to_long_edge(
-    image: Image.Image, max_long_edge: int = 1200
+    image: Image.Image, max_long_edge: int = 1600
 ) -> Image.Image:
     """Return a resized copy of the image constrained by its longest edge."""
     width, height = image.size
@@ -60,7 +60,7 @@ def img_to_url(img: Image.Image):
 def render_page_image_base64(
     doc: fitz.Document,
     page_index: int,
-    max_long_edge: int = 1200,
+    max_long_edge: int = 1600,
     format: str = "PNG",
     decode: str = "ascii",
 ) -> str:

@@ -1,13 +1,16 @@
 import logging
-import ollama
+import re
 from typing import Any
+
+import ollama
 from pydantic import BaseModel
+
 from bookinfo import BookInfoRequestPipeline
 from bookinfo.blocks import construct_blocks, get_img_blocks, get_text_blocks
-from datamodel.book_info import BookInfo
-from datamodel.book_info_confidence import BookInfoConfidence
-from datamodel.book_info_response import BookInfoResponse
-from datamodel.pdf_ocr_results import PdfOcrResults
+from bookinfo.book_info import BookInfo
+from bookinfo.book_info_confidence import BookInfoConfidence
+from bookinfo.book_info_response import BookInfoResponse
+from ocr.pdf_ocr_results import PdfOcrResults
 from llm import cached_ollama_chat
 from ocr.rendering import img_to_b64
 
@@ -56,6 +59,19 @@ def blocks_to_ollama_messages(blocks: dict[str, Any]) -> list[ollama.Message]:
     ]
 
 
+def strip_code_fences(payload: str) -> str:
+    """Remove Markdown code fences so JSON parsing succeeds."""
+    text = payload.strip()
+    if not text.startswith("```"):
+        return text
+    # Remove leading ```json and trailing ``` blocks.
+    text = re.sub(
+        r"^```(?:\w+)?\s*", "", text, count=1, flags=re.IGNORECASE | re.MULTILINE
+    )
+    text = re.sub(r"\s*```$", "", text, count=1)
+    return text.strip()
+
+
 def ollama_bookinfo_request(
     client: ollama.Client, model: str
 ) -> BookInfoRequestPipeline:
@@ -79,7 +95,9 @@ def ollama_bookinfo_request(
         response = cached_ollama_chat(model, messages, client)
         response_content = response["message"]["content"]
         logging.info(f"\n\nOLLAMA RESPONSE:\n{response_content}\n\n")
-        summary = SimplifiedBookInfoSummary.model_validate_json(response_content)
+        summary = SimplifiedBookInfoSummary.model_validate_json(
+            strip_code_fences(response_content)
+        )
         return summary_to_response(summary)
 
-    return run
+    return run  # type: ignore

@@ -1,10 +1,11 @@
+import logging
 from typing import Sequence
 
 import ollama
 
 from bookinfo.providers.ollama import blocks_to_imgs
-from datamodel.book_info import DetailedBookInfo
-from datamodel.pdf_ocr_results import PdfOcrResults
+from bookinfo.book_info import DetailedBookInfo
+from ocr.pdf_ocr_results import PdfOcrResults
 from llm import cached_ollama_chat
 from rank import (
     BookInfoSelectionPipeline,
@@ -36,6 +37,9 @@ def ollama_selection_runner(
             client,
             format=DetailedBookInfo.model_json_schema(),  # type: ignore[arg-type]
         )
+        logging.info("\n\nOUTPUT FROM OLLAMA============================")
+        logging.info(response["message"]["content"])
+        logging.info("==================================================\n\n")
         return DetailedBookInfo.model_validate_json(response["message"]["content"])
 
-    return run
+    return run  # type: ignore

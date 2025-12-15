@@ -4,9 +4,9 @@ from openai import OpenAI
 
 from bookinfo import BOOK_PROMPT, BookInfoRequestPipeline
 from bookinfo.blocks import construct_blocks, get_img_blocks, get_text_blocks
-from datamodel.book_info import BookInfo
-from datamodel.book_info_response import BookInfoResponse
-from datamodel.pdf_ocr_results import PdfOcrResults
+from bookinfo.book_info import BookInfo
+from bookinfo.book_info_response import BookInfoResponse
+from ocr.pdf_ocr_results import PdfOcrResults
 from llm import cached_openapi_response_parsed
 from ocr.rendering import img_to_url
 
@@ -31,4 +31,4 @@ def openai_bookinfo_request(client: OpenAI, model: str) -> BookInfoRequestPipeli
             model, context, client, text_format=BookInfoResponse
         )
 
-    return run
+    return run  # type: ignore

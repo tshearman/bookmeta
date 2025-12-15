@@ -1,9 +1,13 @@
 import argparse
 import json
 import logging
-from dataclasses import asdict, dataclass, is_dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+import joblib
+import ollama
+
 from bookinfo.pipeline import (
     BookInfoPipelineConfig,
     generate_pipeline as generate_bookinfo_pipeline,
@@ -14,8 +18,10 @@ from booksearch.pipeline import (
 )
 from booksearch.providers.googlebooks import GoogleBooksClientConfig, googlebooks_search
 from datamodel.book_info import DetailedBookInfo
+from ocr.ocr import native_ocr_method, ollama_ocr_method, tesseract_ocr_method
 from ocr.pipeline import OcrPipelineConfig, generate_pipeline as generate_ocr_pipeline
 from rank.pipeline import BookInfoSelectionPipelineConfig, generate_selection_pipeline
+from storage import DEFAULT_DB_PATH, persist_run, serialize_pipeline_config
 
 
 @dataclass
@@ -27,6 +33,8 @@ class PipelineConfig:
 
 
 BookMetaPipeline = Callable[[Path], DetailedBookInfo]
+
+PDF_MEMORY = joblib.Memory(".cache/pipeline", verbose=1)
 
 
 def parse_args() -> argparse.Namespace:
@@ -51,6 +59,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=2,
         help="Path to secrets JSON with API keys.",
+    )
+    parser.add_argument(
+        "--ocr-ollama-model",
+        type=str,
+        default=None,
+        help="Provider for the initial BookInfo extraction stage.",
     )
     parser.add_argument(
         "--extraction-provider",
@@ -79,6 +93,12 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=3,
         help="Maximum Google Books results to fetch during book search.",
+    )
+    parser.add_argument(
+        "--results-db",
+        type=Path,
+        default=DEFAULT_DB_PATH,
+        help="Path to the SQLite DB used to log pipeline runs.",
     )
     parser.add_argument(
         "--log-level",
@@ -110,7 +130,14 @@ def build_pipeline_config(
     args: argparse.Namespace, secrets: dict[str, Any]
 ) -> PipelineConfig:
 
-    ocr_config = OcrPipelineConfig()
+    ocr_methods = [native_ocr_method, tesseract_ocr_method]
+    if args.ocr_ollama_model is not None:
+        llm_ocr = ollama_ocr_method(
+            ollama.Client(secrets["OLLAMA_HOST"]), args.ocr_ollama_model
+        )
+        ocr_methods.append(llm_ocr)  # type: ignore
+
+    ocr_config = OcrPipelineConfig(ocr_methods=ocr_methods)
     extraction_config = BookInfoPipelineConfig(
         provider=args.extraction_provider,
         client_config=_client_config_for(args.extraction_provider, secrets),
@@ -154,19 +181,32 @@ def pipeline(config: PipelineConfig) -> BookMetaPipeline:
     return _inner_
 
 
+@PDF_MEMORY.cache(ignore=["config"])
+def execute_pipeline(
+    pdf: Path, config: PipelineConfig, config_signature: str
+) -> DetailedBookInfo:
+    return pipeline(config)(pdf)
+
+
 def main():
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
     secrets = _read_secrets(args.secrets)
     config = build_pipeline_config(args, secrets)
-    run_pipeline = pipeline(config)
 
+    config_signature = json.dumps(serialize_pipeline_config(config), sort_keys=True)
     logging.info("Running pipeline on %s", args.pdf_path)
-    final_info = run_pipeline(args.pdf_path)
+    final_info = execute_pipeline(args.pdf_path, config, config_signature)
     logging.info("Final BookInfo:\n%s", final_info)
+
+    try:
+        persist_run(args.results_db, args.pdf_path, config, final_info)
+        logging.info("Persisted pipeline run to %s", args.results_db)
+    except Exception:
+        logging.exception("Failed to persist pipeline run.")
     return final_info
 
 
 if __name__ == "__main__":
-    out = main()
+    out: DetailedBookInfo = main()
     print(json.dumps(out.model_dump(), indent=2))

@@ -33,7 +33,7 @@ def tesseract_ocr_method(page: fitz.Page) -> OcrResult | None:
 def ollama_ocr_method(client: ollama.Client, model) -> OcrMethod:
 
     def run(page: fitz.Page) -> OcrResult | None:
-        img = page_to_image(page, grayscale=True, max_long_edge=1200)
+        img = page_to_image(page, grayscale=True, max_long_edge=1600)
 
         messages = [
             ollama.Message(
@@ -53,7 +53,7 @@ def ollama_ocr_method(client: ollama.Client, model) -> OcrMethod:
 def openai_ocr_method(client: OpenAI, model) -> OcrMethod:
 
     def run(page: fitz.Page) -> OcrResult | None:
-        img = page_to_image(page, grayscale=True, max_long_edge=1200)
+        img = page_to_image(page, grayscale=True, max_long_edge=1600)
         img_block = {"type": "input_image", "image_url": img_to_url(img)}
         prompt_block = {"type": "input_text", "text": OCR_LLM_PROMPT}
         context = [{"role": "user", "content": [prompt_block, img_block]}]

@@ -51,7 +51,7 @@ def process_page(
     def __inner__(idx: int) -> OCRedPage:
         page_number = idx + 1
         page = doc.load_page(idx)
-        img = page_to_image(page, grayscale=True, max_long_edge=1200)
+        img = page_to_image(page, grayscale=True, max_long_edge=1600)
         ocr_results: list[OcrResult] = []
         for method in ocr_methods:
             result = method(page)
