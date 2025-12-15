@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -7,8 +5,8 @@ from typing import Any
 import httpx
 
 from booksearch import BookSearchMethod
-from datamodel.book_info_response import BookInfoResponse
-from datamodel.google_books_query_params import GoogleBooksQueryParams
+from bookinfo.book_info_response import BookInfoResponse
+from booksearch.google_books_query_params import GoogleBooksQueryParams
 
 
 @dataclass

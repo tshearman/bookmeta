@@ -7,8 +7,8 @@ from openai import OpenAI
 from pydantic import Field
 from bookinfo import DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_MODEL, Provider
 from booksearch.pipeline import BookSearchResults
-from datamodel.book_info import DetailedBookInfo
-from datamodel.pdf_ocr_results import PdfOcrResults
+from bookinfo.book_info import DetailedBookInfo
+from ocr.pdf_ocr_results import PdfOcrResults
 from rank import BookInfoSelectionPipeline, BookSearchCandidate
 from rank.providers.ollama import ollama_selection_runner
 from rank.providers.openai import openai_selection_runner

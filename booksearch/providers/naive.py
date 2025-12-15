@@ -1,6 +1,6 @@
 import json
 from booksearch import BookSearchMethod
-from datamodel.book_info_response import BookInfoResponse
+from bookinfo.book_info_response import BookInfoResponse
 
 
 def book_search(resp: BookInfoResponse) -> str:

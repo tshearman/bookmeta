@@ -1,6 +1,6 @@
 from pathlib import Path
 from typing import Any
-from datamodel.pdf_ocr_results import PdfOcrResults
+from ocr.pdf_ocr_results import PdfOcrResults
 
 
 def construct_blocks(

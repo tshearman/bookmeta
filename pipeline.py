@@ -17,7 +17,7 @@ from booksearch.pipeline import (
     generate_pipeline as generate_booksearch_pipeline,
 )
 from booksearch.providers.googlebooks import GoogleBooksClientConfig, googlebooks_search
-from datamodel.book_info import DetailedBookInfo
+from bookinfo.book_info import DetailedBookInfo
 from ocr.ocr import native_ocr_method, ollama_ocr_method, tesseract_ocr_method
 from ocr.pipeline import OcrPipelineConfig, generate_pipeline as generate_ocr_pipeline
 from rank.pipeline import BookInfoSelectionPipelineConfig, generate_selection_pipeline

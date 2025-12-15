@@ -1,22 +1,16 @@
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Protocol, Sequence, cast
-import ollama
-from openai import OpenAI
+from typing import Callable, Sequence
 from pydantic.dataclasses import dataclass
 import fitz
 
-from bookinfo import DEFAULT_OPENAI_MODEL
-from datamodel.img_ocr_result import OcrResult
-from datamodel.pdf_ocr_results import OCRedPage, PdfOcrResults, build_combined_ocr_text
+from ocr.img_ocr_result import OcrResult
+from ocr.pdf_ocr_results import OCRedPage, PdfOcrResults, build_combined_ocr_text
 from ocr.metadata import load_pdf_metadata
 from ocr.ocr import (
     OcrMethod,
     native_ocr_method,
-    ollama_ocr_method,
-    openai_ocr_method,
     tesseract_ocr_method,
 )
 from ocr.rendering import page_to_image

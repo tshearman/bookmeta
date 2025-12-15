@@ -1,13 +1,10 @@
 import logging
-import json
 import logging
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Callable, Sequence
 
-from datamodel.book_info_response import BookInfoResponse
+from bookinfo.book_info_response import BookInfoResponse
 from booksearch import BookSearchMethod
-from datamodel.pdf_ocr_results import PdfOcrResults
 
 
 LOGGER = logging.getLogger("booksearch.pipeline")

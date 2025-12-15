@@ -4,7 +4,7 @@ import fitz
 import ollama
 from openai import OpenAI
 import pytesseract
-from datamodel.img_ocr_result import OcrResult
+from ocr.img_ocr_result import OcrResult
 from llm import (
     cached_ollama_chat,
     cached_openapi_response_text,

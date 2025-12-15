@@ -2,8 +2,8 @@ from typing import Sequence
 import openai
 from bookinfo.blocks import get_img_blocks
 from bookinfo.providers.openai import parse_img_block
-from datamodel.book_info import DetailedBookInfo
-from datamodel.pdf_ocr_results import PdfOcrResults
+from bookinfo.book_info import DetailedBookInfo
+from ocr.pdf_ocr_results import PdfOcrResults
 from llm import cached_openapi_response_parsed
 from rank import (
     BookInfoSelectionPipeline,

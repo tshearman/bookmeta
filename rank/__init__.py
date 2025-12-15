@@ -2,8 +2,8 @@ import json
 from typing import Any, Callable, Sequence, Union
 
 from booksearch.pipeline import BookSearchResults
-from datamodel.book_info import BookInfo, DetailedBookInfo
-from datamodel.pdf_ocr_results import PdfOcrResults
+from bookinfo.book_info import BookInfo, DetailedBookInfo
+from ocr.pdf_ocr_results import PdfOcrResults
 from bookinfo.blocks import (
     construct_blocks,
     get_text_blocks as bookinfo_text_blocks,

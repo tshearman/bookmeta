@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from datamodel.book_info import DetailedBookInfo
+from bookinfo.book_info import DetailedBookInfo
 
 DEFAULT_DB_PATH = Path("bookmeta.db")
 
