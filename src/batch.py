@@ -12,7 +12,7 @@ from pipeline import (
     build_pipeline_config,
     execute_pipeline,
 )
-from storage import (
+from src.storage import (
     DEFAULT_DB_PATH,
     _compute_pdf_hash,
     persist_run,

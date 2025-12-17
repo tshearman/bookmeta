@@ -1,0 +1,3 @@
+-r requirements.txt
+seaborn==0.13.2
+scikit-learn==1.5.2

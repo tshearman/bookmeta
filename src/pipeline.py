@@ -21,7 +21,7 @@ from bookinfo.book_info import DetailedBookInfo
 from ocr.ocr import native_ocr_method, ollama_ocr_method, tesseract_ocr_method
 from ocr.pipeline import OcrPipelineConfig, generate_pipeline as generate_ocr_pipeline
 from rank.pipeline import BookInfoSelectionPipelineConfig, generate_selection_pipeline
-from storage import DEFAULT_DB_PATH, persist_run, serialize_pipeline_config
+from src.storage import DEFAULT_DB_PATH, persist_run, serialize_pipeline_config
 
 
 @dataclass
