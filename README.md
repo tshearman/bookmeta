@@ -1,0 +1,77 @@
+# BookMeta
+
+Modern Python package for extracting, enriching, and embedding metadata in book PDFs. The codebase uses the standard `src/` layout with packaging defined in `pyproject.toml` so it can be installed with any PEP 517 build backend. We recommend [uv](https://docs.astral.sh/uv/) for dependency management and running the CLI tools.
+
+## Prerequisites
+
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) installed on your PATH
+- Tesseract + system libraries needed by PyMuPDF for OCR support
+
+## Installation with uv
+
+```bash
+# Create (or reuse) a local virtualenv
+uv venv
+source .venv/bin/activate
+
+# Install the package in editable mode with dev tooling
+uv pip install -e .[dev]
+```
+
+Before running CLI commands, make sure you have the required SQLite database and secrets configured (`resources/bookmeta.db`, `secrets.json`).
+
+## CLI usage
+
+All entry points are exposed via `pyproject.toml` scripts, so you can call them directly or through `uv run`:
+
+```bash
+# Main pipeline for a single PDF
+uv run bookmeta path/to/book.pdf --results-db resources/bookmeta.db
+
+# Batch pipeline
+uv run bookmeta-batch /path/to/pdf/directory --results-db resources/bookmeta.db
+
+# Normalize + embed canonical metadata
+uv run bookmeta-normalize /path/to/pdfs output/dir --db-path resources/bookmeta.db
+```
+
+Each command accepts additional options (run with `--help`).
+
+## Project layout
+
+```
+src/bookmeta/          # Package code
+├── cli/               # Console entry points
+├── config/            # Shared configuration helpers
+├── data/              # Persistence helpers (SQLite, models)
+├── metadata/          # PDF metadata embedding helpers
+├── pipelines/         # Multi-stage workflows (normalize, etc.)
+└── services/          # OCR, LLM, search, and ranking services
+
+tools/java/            # Companion Java CLI tools
+resources/             # Sample SQLite DB + fixtures
+tests/                 # Pytest suites (unit + integration placeholders)
+```
+
+## Development
+
+Run formatting/linting/tests with uv:
+
+```bash
+uv run ruff check src tests
+uv run pytest
+```
+
+To hack on the Java tools, step into `tools/java/` and use the shared Gradle wrapper.
+
+## Java CLI tools
+
+The repository ships two companion JVM CLIs (`pdf-metadata-extractor-cli` and `pdf-metadata-writer-cli`) that reuse the PdfBox/Jackson helpers under `tools/java/pdf-metadata-core`. They target Java 21 via the Gradle toolchain so you do not need to install Gradle or juggle different JDK versions—just ensure a JDK 21 runtime is available.
+
+- **Build from source** – change into `tools/java/` and run `./gradlew build` to compile every module and execute their tests. You can also build a single CLI, e.g. `./gradlew :pdf-metadata-extractor-cli:build`.
+- **Install runnable distributions** – run `./gradlew :pdf-metadata-extractor-cli:installDist` (or swap in `pdf-metadata-writer-cli`). The Application plugin writes launch scripts under `tools/java/<module>/build/install/<module>/bin/`. Add those binaries to your PATH or call them via their absolute paths.
+- **Run directly with Gradle** – when iterating locally, `./gradlew :pdf-metadata-extractor-cli:run --args="/path/book.pdf --cover /tmp/cover.jpg"` prints pretty JSON metadata (and an optional JPEG cover). The writer CLI mirrors the extractor syntax but expects an input PDF, destination, and metadata JSON: `./gradlew :pdf-metadata-writer-cli:run --args="/path/original.pdf /tmp/output.pdf /path/metadata.json"`.
+- **Package as archives** – `./gradlew :pdf-metadata-extractor-cli:distZip` or `distTar` produces self-contained archives that you can copy to other machines. Extract them and invoke the `bin/` scripts as above.
+
+Each CLI directory contains a focused README with more usage examples and flag descriptions.
