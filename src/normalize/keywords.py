@@ -43,7 +43,9 @@ def get_keywords_by_pdf_hash(db_path: Path | str = DEFAULT_DB_PATH) -> pd.DataFr
     LOGGER.info("Loading keywords from %s", path)
     conn = sqlite3.connect(path)
     try:
-        df = pd.read_sql_query("SELECT pdf_hash, result FROM pipeline_runs", conn)
+        df = pd.read_sql_query(
+            "SELECT pdf_hash, pdf_name, result FROM pipeline_runs", conn
+        )
     finally:
         conn.close()
     LOGGER.info("Read %d rows in dataframe from %s", len(df), path)
@@ -52,6 +54,7 @@ def get_keywords_by_pdf_hash(db_path: Path | str = DEFAULT_DB_PATH) -> pd.DataFr
         return pd.DataFrame(
             columns=[
                 "pdf_hash",
+                "pdf_name",
                 "title",
                 "author",
                 "publisher",
@@ -254,10 +257,10 @@ def normalize_keyword(keyword: str) -> str:
         no_phone_numbers=True,
         no_digits=False,
         no_currency_symbols=False,
-        no_punct=False,
+        no_punct=True,
     )
     text = text.replace("&", " and ")
-    for delim in ("_", "-", "/"):
+    for delim in ("_", "-", "/", ","):
         text = text.replace(delim, " ")
     tokens = [token for token in text.split()]
     normalized = " ".join(tokens)

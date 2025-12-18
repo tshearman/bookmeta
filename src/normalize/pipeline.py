@@ -5,13 +5,13 @@ from dataclasses import asdict, dataclass
 import json
 import logging
 import sqlite3
-import subprocess
 import sys
-import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from threading import Lock
 from pathlib import Path
 from typing import Iterable
+
+import joblib
 
 import pandas as pd
 from tqdm.auto import tqdm
@@ -31,9 +31,12 @@ from src.normalize.keywords import (
     normalize_keyword,
 )
 from src.normalize.publisher import normalize_publisher
+from src.metadata.writer import MetadataHelper, embed_metadata, ensure_copy
 
 LOGGER = logging.getLogger(__name__)
 FAILURE_LOG_LOCK = Lock()
+CACHE_DIR = PROJECT_ROOT / ".cache" / "normalize_pipeline"
+NORMALIZE_CACHE = joblib.Memory(CACHE_DIR, verbose=0)
 
 
 def _flatten_keywords(keyword_sets: Iterable[Iterable[str]]) -> list[str]:
@@ -45,7 +48,8 @@ def _flatten_keywords(keyword_sets: Iterable[Iterable[str]]) -> list[str]:
     return list(unique.keys())
 
 
-def normalize_keywords_pipeline(
+@NORMALIZE_CACHE.cache
+def _normalize_keywords_pipeline_cached(
     db_path: Path | str = DEFAULT_DB_PATH,
     *,
     workers: int = 4,
@@ -55,7 +59,6 @@ def normalize_keywords_pipeline(
     canonical_host: str = "http://192.168.1.31:11434",
     canonical_model: str = "qwen2.5vl:32b",
     canonical_temperature: float = 0.01,
-    write_to_disk: bool = False,
 ) -> pd.DataFrame:
     """Load keywords from the DB, cluster them, and assign canonical labels."""
 
@@ -125,6 +128,32 @@ def normalize_keywords_pipeline(
     df["canonical_keywords"] = df["canonical_keywords"].apply(json.dumps)
     LOGGER.info("Assigned canonical keywords for all rows")
 
+    return df
+
+
+def normalize_keywords_pipeline(
+    db_path: Path | str = DEFAULT_DB_PATH,
+    *,
+    workers: int = 4,
+    embedding_host: str = "http://192.168.1.31:11434",
+    embedding_model: str = "snowflake-arctic-embed:335m",
+    cluster_count: int | None = None,
+    canonical_host: str = "http://192.168.1.31:11434",
+    canonical_model: str = "qwen2.5vl:32b",
+    canonical_temperature: float = 0.01,
+    write_to_disk: bool = False,
+) -> pd.DataFrame:
+    df = _normalize_keywords_pipeline_cached(
+        db_path=db_path,
+        workers=workers,
+        embedding_host=embedding_host,
+        embedding_model=embedding_model,
+        cluster_count=cluster_count,
+        canonical_host=canonical_host,
+        canonical_model=canonical_model,
+        canonical_temperature=canonical_temperature,
+    )
+
     if write_to_disk:
         path = Path(db_path)
         LOGGER.info("Writing normalized metadata to %s", path)
@@ -157,6 +186,7 @@ class BookMetadataEntity:
     subtitle: str | None
     publisher: str | None
     categories: list[str]
+    tags: list[str]
     description: str | None
     isbn13: str | None
     isbn10: str | None
@@ -165,7 +195,7 @@ class BookMetadataEntity:
 def row_to_book_metadata(row: pd.Series) -> BookMetadataEntity:
     keywords = _load_list(row.get("keywords"))
     canonical = _load_list(row.get("canonical_keywords"))
-    categories = sorted({kw.lower() for kw in keywords + canonical if kw})
+    tags = sorted({kw.lower() for kw in keywords + canonical if kw})
 
     author_value = row.get("author")
     authors = _load_list(author_value)
@@ -187,16 +217,18 @@ def row_to_book_metadata(row: pd.Series) -> BookMetadataEntity:
         elif len(digits) == 10 and isbn_10 is None:
             isbn_10 = digits
 
-    return BookMetadataEntity(
+    out = BookMetadataEntity(
         authors=authors,
         title=row.get("title"),
         subtitle=row.get("subtitle"),
         publisher=publisher.title() if publisher else None,
-        categories=categories,
+        categories=[],
+        tags=tags,
         description=row.get("description"),
         isbn13=isbn_13,
         isbn10=isbn_10,
     )
+    return out
 
 
 def attach_book_metadata_payloads(df: pd.DataFrame) -> pd.DataFrame:
@@ -208,6 +240,7 @@ def attach_book_metadata_payloads(df: pd.DataFrame) -> pd.DataFrame:
             "subtitle": metadata.subtitle,
             "publisher": metadata.publisher,
             "categories": metadata.categories,
+            "tags": metadata.tags,
             "description": metadata.description,
             "isbn_13": metadata.isbn13,
             "isbn_10": metadata.isbn10,
@@ -219,14 +252,22 @@ def attach_book_metadata_payloads(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def dataframe_to_metadata_map(df: pd.DataFrame) -> dict[str, BookMetadataEntity]:
-    records: dict[str, BookMetadataEntity] = {}
+def dataframe_to_metadata_maps(
+    df: pd.DataFrame,
+) -> tuple[dict[str, BookMetadataEntity], dict[str, BookMetadataEntity]]:
+    by_hash: dict[str, BookMetadataEntity] = {}
+    by_name: dict[str, BookMetadataEntity] = {}
     for _, row in df.iterrows():
-        pdf_hash = str(row.get("pdf_hash"))
-        if not pdf_hash:
-            continue
-        records[pdf_hash] = row_to_book_metadata(row)
-    return records
+        entity = row_to_book_metadata(row)
+        pdf_hash = str(row.get("pdf_hash") or "").strip()
+        if pdf_hash:
+            by_hash[pdf_hash] = entity
+        pdf_name = row.get("pdf_name")
+        if isinstance(pdf_name, str):
+            name = pdf_name.strip()
+            if name:
+                by_name[name] = entity
+    return by_hash, by_name
 
 
 def _collect_pdfs(pdf_path: Path) -> list[Path]:
@@ -237,96 +278,11 @@ def _collect_pdfs(pdf_path: Path) -> list[Path]:
     return sorted(pdf_path.rglob("*.pdf"))
 
 
-def _compute_java_classpath(java_root: Path) -> str:
-    build_dir = java_root / "build"
-    default_cp = ":".join(
-        [
-            str(build_dir / "classes" / "java" / "main"),
-            str(build_dir / "resources" / "main"),
-        ]
-    )
-    gradle_exec = java_root / "gradlew"
-    if gradle_exec.exists():
-        try:
-            result = subprocess.run(
-                [str(gradle_exec), "-q", "printClasspath"],
-                cwd=java_root,
-                capture_output=True,
-                text=True,
-                check=True,
-            )
-            extra = result.stdout.strip()
-            if extra:
-                return f"{default_cp}:{extra}"
-        except subprocess.CalledProcessError as exc:
-            LOGGER.warning(
-                "Failed to compute Gradle classpath via printClasspath: %s", exc
-            )
-    else:
-        LOGGER.warning("gradlew not found at %s; using default classpath", gradle_exec)
-    return default_cp
-
-
-def _write_metadata_file(entity: BookMetadataEntity) -> Path:
-    temp = tempfile.NamedTemporaryFile("w", delete=False, suffix=".json")
-    try:
-        json.dump(asdict(entity), temp, ensure_ascii=False, indent=2)
-    finally:
-        temp.close()
-    return Path(temp.name)
-
-
-def _run_java_writer(
-    pdf: Path,
-    metadata_file: Path,
-    output_dir: Path,
-    classpath: str,
-    java_root: Path,
-    java_binary: str,
-) -> None:
-    cmd = [
-        java_binary,
-        "-cp",
-        classpath,
-        "com.adityachandel.booklore.service.metadata.writer.PdfMetadataWriter",
-        "--pdf",
-        str(pdf),
-        "--out",
-        str(output_dir),
-        "--metadata",
-        str(metadata_file),
-    ]
-    LOGGER.info(
-        "Executing Java metadata writer: %s", " ".join(str(part) for part in cmd)
-    )
-    try:
-        subprocess.run(cmd, check=True, cwd=java_root, capture_output=True, text=True)
-    except FileNotFoundError as exc:
-        LOGGER.error(
-            "Java executable not found while processing %s. Ensure Java is installed.",
-            pdf,
-        )
-        raise RuntimeError("Java runtime not found") from exc
-    except subprocess.CalledProcessError as exc:
-        LOGGER.error(
-            "Java process failed for %s with return code %s", pdf, exc.returncode
-        )
-        if exc.stdout:
-            LOGGER.error("STDOUT:\n%s", exc.stdout)
-        if exc.stderr:
-            LOGGER.error("STDERR:\n%s", exc.stderr)
-        raise RuntimeError(
-            "Java command failed. Ensure a JVM is installed and available."
-        ) from exc
-
-
 def _process_pdf(
     pdf_path: Path,
-    metadata_map: dict[str, BookMetadataEntity],
+    metadata_by_hash: dict[str, BookMetadataEntity],
+    metadata_by_name: dict[str, BookMetadataEntity],
     output_dir: Path,
-    classpath: str,
-    java_root: Path,
-    java_binary: str,
     failure_log: Path,
     pdf_root: Path,
 ) -> None:
@@ -336,23 +292,36 @@ def _process_pdf(
         relative = Path(pdf_path.name)
 
     target_dir = output_dir / relative.parent
-    target_dir.mkdir(parents=True, exist_ok=True)
     target_pdf = target_dir / relative.name
-    if target_pdf.exists():
+    source_resolved = pdf_path.resolve()
+    target_resolved = target_pdf.resolve()
+    if target_resolved == source_resolved:
+        target_dir = output_dir / "__normalized__" / relative.parent
+        target_pdf = target_dir / relative.name
+        target_resolved = target_pdf.resolve()
+    target_dir.mkdir(parents=True, exist_ok=True)
+    if target_pdf.exists() and target_resolved != source_resolved:
         LOGGER.info("Skipping %s; output already exists at %s", pdf_path, target_pdf)
         return
 
     pdf_hash = _compute_pdf_hash(pdf_path)
-    entity = metadata_map.get(pdf_hash)
+    entity = metadata_by_hash.get(pdf_hash)
+
+    LOGGER.info("Processing %s (hash=%s)", pdf_path, pdf_hash)
+    LOGGER.info("Hash lookup result: %s", entity)
+    if not entity:
+        entity = metadata_by_name.get(pdf_path.name)
+        LOGGER.info("Name lookup result: %s", entity)
     if not entity:
         LOGGER.warning("No metadata available for %s (hash=%s)", pdf_path, pdf_hash)
         return
-    metadata_file = _write_metadata_file(entity)
+
+    helper = MetadataHelper(asdict(entity))
     try:
-        _run_java_writer(
-            pdf_path, metadata_file, target_dir, classpath, java_root, java_binary
-        )
-        LOGGER.info("Wrote metadata for %s to %s", pdf_path, target_dir)
+        copied_pdf = ensure_copy(pdf_path, target_dir)
+        embed_metadata(copied_pdf, helper)
+        embed_metadata(copied_pdf, helper)
+        LOGGER.info("Embedded metadata for %s into %s", pdf_path, copied_pdf)
     except Exception as exc:
         LOGGER.error("Failed processing %s: %s", pdf_path, exc)
         with FAILURE_LOG_LOCK:
@@ -360,8 +329,6 @@ def _process_pdf(
             with failure_log.open("a", encoding="utf-8") as fh:
                 fh.write(f"{pdf_path}: {exc}\n")
         return
-    finally:
-        metadata_file.unlink(missing_ok=True)
 
 
 def run_metadata_writer(
@@ -371,22 +338,22 @@ def run_metadata_writer(
     *,
     workers: int = 4,
     n_clusters=750,
-    java_root: Path | None = None,
-    java_binary: str = "java",
 ) -> None:
     LOGGER.info("Normalizing metadata from %s", db_path)
     df = normalize_keywords_pipeline(
         db_path=db_path, write_to_disk=False, cluster_count=n_clusters
     )
     df = attach_book_metadata_payloads(df)
-    metadata_map = dataframe_to_metadata_map(df)
-    LOGGER.info("Built metadata map with %d entries", len(metadata_map))
+    metadata_by_hash, metadata_by_name = dataframe_to_metadata_maps(df)
+    LOGGER.info(
+        "Built metadata maps with %d hash entries and %d name entries",
+        len(metadata_by_hash),
+        len(metadata_by_name),
+    )
 
     pdfs = _collect_pdfs(pdf_path)
     LOGGER.info("Found %d PDF(s) to process", len(pdfs))
     output_dir.mkdir(parents=True, exist_ok=True)
-    java_root = java_root or PROJECT_ROOT
-    classpath = _compute_java_classpath(java_root)
     failure_log = output_dir / "metadata_failures.log"
     failure_log.write_text("", encoding="utf-8")
     pdf_root = pdf_path if pdf_path.is_dir() else pdf_path.parent
@@ -396,11 +363,9 @@ def run_metadata_writer(
             executor.submit(
                 _process_pdf,
                 pdf,
-                metadata_map,
+                metadata_by_hash,
+                metadata_by_name,
                 output_dir,
-                classpath,
-                java_root,
-                java_binary,
                 failure_log,
                 pdf_root,
             )
@@ -417,11 +382,9 @@ def run_metadata_writer(
 
 __all__ = [
     "normalize_keywords_pipeline",
-    "build_metadata_payload",
-    "write_metadata_json",
     "row_to_book_metadata",
     "attach_book_metadata_payloads",
-    "dataframe_to_metadata_map",
+    "dataframe_to_metadata_maps",
     "run_metadata_writer",
     "BookMetadataEntity",
 ]
@@ -429,7 +392,7 @@ __all__ = [
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Normalize PDF metadata and invoke the Java PdfMetadataWriter."
+        description="Normalize PDF metadata and embed it directly into PDFs."
     )
     parser.add_argument("pdf_path", type=Path, help="Path to a PDF file or directory.")
     parser.add_argument(
@@ -448,29 +411,21 @@ def main() -> None:
         help="Number of worker threads for PDF processing.",
     )
     parser.add_argument(
-        "--java-root",
-        type=Path,
-        default="/Users/toby/projects/booklore/booklore-api",
-        help="Path to the Java project root containing gradlew. Defaults to script root.",
-    )
-    parser.add_argument(
-        "--java-binary",
-        type=str,
-        default="/opt/homebrew/opt/openjdk@21/bin/java",
-        help="Path to the java executable. Defaults to 'java' in PATH.",
+        "--log-level",
+        default="INFO",
+        help="Logging level (DEBUG, INFO, WARNING, ERROR).",
     )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.ERROR)
-    logging.getLogger("httpx").setLevel(logging.ERROR)
+    log_level = getattr(logging, args.log_level.upper(), logging.INFO)
+    logging.basicConfig(level=log_level)
+    logging.getLogger("httpx").setLevel(logging.INFO)
 
     run_metadata_writer(
         db_path=args.db_path,
         pdf_path=args.pdf_path.resolve(),
         output_dir=args.output_dir.resolve(),
         workers=args.workers,
-        java_root=args.java_root.resolve() if args.java_root else None,
-        java_binary=args.java_binary,
     )
 
 
