@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bookmeta"
+version = "0.1.0"
+description = "Pipelines for extracting, enriching, and normalizing book metadata from PDFs."
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "BookMeta contributors" }]
+keywords = ["pdf", "ocr", "metadata", "books"]
+dependencies = [
+    "clean-text>=0.6.0",
+    "httpx>=0.27.0",
+    "joblib>=1.3.0",
+    "numpy>=1.26.0",
+    "ollama>=0.4.6",
+    "openai>=2.9.0",
+    "pandas>=2.2.0",
+    "pillow>=10.0.0",
+    "pydantic>=2.8.0",
+    "PyMuPDF>=1.24.0",
+    "pytesseract>=0.3.10",
+    "rapidfuzz>=3.9.0",
+    "requests>=2.31.0",
+    "scikit-learn>=1.5.0",
+    "tqdm>=4.65.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3.0",
+    "ruff>=0.6.0",
+]
+
+[project.scripts]
+bookmeta = "bookmeta.cli.pipeline:main"
+bookmeta-batch = "bookmeta.cli.batch:main"
+bookmeta-normalize = "bookmeta.pipelines.normalization.pipeline:main"
+
+[project.urls]
+homepage = "https://github.com/tshearman/bookmeta"
+repository = "https://github.com/tshearman/bookmeta"
+issues = "https://github.com/tshearman/bookmeta/issues"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.3.0",
+    "ruff>=0.6.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-dir]
+"" = "src"

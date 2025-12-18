@@ -1,0 +1,27 @@
+subprojects {
+    apply plugin: "java"
+
+    java {
+        toolchain {
+            languageVersion = JavaLanguageVersion.of(21)
+        }
+    }
+
+    repositories {
+        mavenCentral()
+    }
+}
+
+project(":pdf-metadata-core") {
+    apply plugin: "java-library"
+
+    dependencies {
+        api("org.apache.pdfbox:pdfbox:3.0.6")
+        api("org.apache.pdfbox:xmpbox:3.0.6")
+        api("commons-io:commons-io:2.16.1")
+        api("org.apache.commons:commons-lang3:3.14.0")
+        api("com.fasterxml.jackson.core:jackson-databind:2.17.1")
+        api("com.fasterxml.jackson.datatype:jackson-datatype-jsr310:2.17.1")
+        api("org.slf4j:slf4j-api:2.0.13")
+    }
+}

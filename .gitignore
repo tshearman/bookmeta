@@ -1,5 +1,7 @@
 __pycache__
 .cache
 secrets.json
-test_pdfs
+tests/fixtures/pdfs/output
 batch_failures.log
+tools/java/**/build/
+tools/java/**/.gradle/
