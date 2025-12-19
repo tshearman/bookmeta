@@ -5,7 +5,6 @@ from typing import Callable, Sequence
 from bookmeta.services.bookinfo.book_info_response import BookInfoResponse
 from bookmeta.services.booksearch import BookSearchMethod
 
-
 LOGGER = logging.getLogger("booksearch.pipeline")
 
 
@@ -48,10 +47,10 @@ def generate_pipeline(config: BookSearchPipelineConfig) -> BookSearchPipeline:
             try:
                 payload = method(resp)
             except Exception:
-                LOGGER.exception("Book search method %s failed; skipping", method_name)
+                LOGGER.exception(f"Book search method {method_name} failed; skipping")
                 continue
             if not payload:
-                LOGGER.info("Book search method %s produced no payload", method_name)
+                LOGGER.info(f"Book search method {method_name} produced no payload")
                 continue
             results.append(BookSearchResult(method=method_name, payload=payload))
         return BookSearchResults(source=resp, results=results)

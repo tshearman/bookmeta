@@ -16,7 +16,7 @@
   - **Owner:** @toby  
   - **Priority:** High
 
-- [ ] **Harden the caching and database operations**  
+- [/] **Harden the caching and database operations**  
   - **Owner:** @toby  
   - **Priority:** High
 

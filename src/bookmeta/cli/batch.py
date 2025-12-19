@@ -1,19 +1,13 @@
 import argparse
-import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from bookmeta.cli.pipeline import (
-    PipelineConfig,
-    _read_secrets,
-    build_pipeline_config,
-    process_pdf,
-)
+from bookmeta.cli.pipeline import _read_secrets, build_pipeline_config, process_pdf
 from bookmeta.config.settings import DEFAULT_DB_PATH
-from bookmeta.data.sqlite import _compute_pdf_hash, serialize_pipeline_config
+from bookmeta.data.sqlite import _compute_pdf_hash
 
 
 def parse_args() -> argparse.Namespace:
@@ -132,22 +126,18 @@ def main() -> dict[str, Any]:
 
     pdfs = _discover_pdfs(args.pdf_directory)
     if not pdfs:
-        logging.warning("No PDFs found inside %s", args.pdf_directory)
+        logging.warning(f"No PDFs found inside {args.pdf_directory}")
         return {"processed": {}, "failed": {}}
     pdfs = _dedupe_pdfs(pdfs)
     if not pdfs:
         logging.warning(
-            "All discovered PDFs under %s were duplicates; nothing to process.",
-            args.pdf_directory,
+            f"All discovered PDFs under {args.pdf_directory} were duplicates; nothing to process."
         )
         return {"processed": {}, "failed": {}}
 
     workers = max(1, args.workers)
     logging.info(
-        "Discovered %d PDFs under %s. Processing with %d workers.",
-        len(pdfs),
-        args.pdf_directory,
-        workers,
+        f"Discovered {len(pdfs)} PDFs under {args.pdf_directory}. Processing with {workers} workers."
     )
 
     processed: dict[str, Any] = {}
@@ -164,11 +154,11 @@ def main() -> dict[str, Any]:
             try:
                 result = future.result()
                 if result is None:
-                    logging.info("No metadata produced for %s; nothing persisted.", pdf)
+                    logging.info(f"No metadata produced for {pdf}; nothing persisted.")
                     continue
                 processed[pdf_hash] = {"input": str(pdf), "output": result.model_dump()}
             except Exception as exc:
-                logging.exception("Pipeline failed for %s", pdf)
+                logging.exception(f"Pipeline failed for {pdf}")
                 failed[pdf_hash] = str(exc)
 
     summary = {"processed": processed, "failed": failed}

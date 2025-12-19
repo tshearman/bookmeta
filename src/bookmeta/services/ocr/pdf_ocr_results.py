@@ -1,8 +1,10 @@
-from pathlib import Path
 from dataclasses import dataclass, field
-from PIL import Image
-from .img_ocr_result import OcrResult
+from pathlib import Path
 from typing import NamedTuple
+
+from PIL import Image
+
+from .img_ocr_result import OcrResult
 
 
 class OCRedPage(NamedTuple):

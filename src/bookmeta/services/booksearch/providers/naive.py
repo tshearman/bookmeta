@@ -1,4 +1,5 @@
 import json
+
 from bookmeta.services.bookinfo.book_info_response import BookInfoResponse
 from bookmeta.services.booksearch import BookSearchMethod
 

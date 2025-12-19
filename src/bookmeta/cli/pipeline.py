@@ -10,14 +10,14 @@ import ollama
 
 from bookmeta.config.settings import DEFAULT_DB_PATH, PIPELINE_CACHE_DIR
 from bookmeta.data.sqlite import persist_run, serialize_pipeline_config
+from bookmeta.services.bookinfo.book_info import DetailedBookInfo
+from bookmeta.services.bookinfo.pipeline import BookInfoPipelineConfig
 from bookmeta.services.bookinfo.pipeline import (
-    BookInfoPipelineConfig,
     generate_pipeline as generate_bookinfo_pipeline,
 )
-from bookmeta.services.bookinfo.book_info import DetailedBookInfo
 from bookmeta.services.booksearch import BookSearchMethod
+from bookmeta.services.booksearch.pipeline import BookSearchPipelineConfig
 from bookmeta.services.booksearch.pipeline import (
-    BookSearchPipelineConfig,
     generate_pipeline as generate_booksearch_pipeline,
 )
 from bookmeta.services.booksearch.providers.googlebooks import (
@@ -34,10 +34,8 @@ from bookmeta.services.ocr.ocr import (
     tesseract_ocr_method,
 )
 from bookmeta.services.ocr.pdf_ocr_results import PdfOcrResults
-from bookmeta.services.ocr.pipeline import (
-    OcrPipelineConfig,
-    generate_pipeline as generate_ocr_pipeline,
-)
+from bookmeta.services.ocr.pipeline import OcrPipelineConfig
+from bookmeta.services.ocr.pipeline import generate_pipeline as generate_ocr_pipeline
 from bookmeta.services.rank.pipeline import (
     BookInfoSelectionPipelineConfig,
     generate_selection_pipeline,
@@ -238,7 +236,7 @@ def pipeline(config: PipelineConfig) -> BookMetaPipeline:
     def _inner_(pdf_path: Path) -> DetailedBookInfo:
         ocr_results = ocr_pipeline(pdf_path)
         if not _has_ocr_text(ocr_results):
-            LOGGER.warning("Skipping %s because OCR produced no text.", pdf_path)
+            LOGGER.warning(f"Skipping {pdf_path} because OCR produced no text.")
             raise NoOcrTextError(f"No OCR text extracted for {pdf_path}")
         search_results = search_pipeline(info_pipeline(ocr_results))
         return selection_pipeline(ocr_results, search_results)
@@ -258,7 +256,7 @@ def process_pdf(
     config: PipelineConfig,
     results_db: Path,
 ) -> DetailedBookInfo | None:
-    LOGGER.info("Running pipeline on %s", pdf)
+    LOGGER.info(f"Running pipeline on {pdf}")
     config_signature = json.dumps(serialize_pipeline_config(config), sort_keys=True)
     try:
         final_info = execute_pipeline(pdf, config, config_signature)

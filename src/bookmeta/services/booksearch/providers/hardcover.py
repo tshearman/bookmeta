@@ -9,7 +9,6 @@ import httpx
 from bookmeta.services.bookinfo.book_info_response import BookInfoResponse
 from bookmeta.services.booksearch import BookSearchMethod
 
-
 LOGGER = logging.getLogger("booksearch.hardcover")
 
 BOOK_WITH_AUTHOR_QUERY = """
@@ -126,7 +125,7 @@ def _execute_books_query(
     response.raise_for_status()
     data = response.json()
     if "errors" in data:
-        LOGGER.warning("Hardcover GraphQL errors: %s", data["errors"])
+        LOGGER.warning(f"Hardcover GraphQL errors: {data['errors']}")
         return []
     books = (data.get("data") or {}).get("books") or []
     return books
@@ -164,17 +163,13 @@ def hardcover_search(config: HardcoverClientConfig) -> BookSearchMethod:
                     )
             except Exception:
                 LOGGER.exception(
-                    "Hardcover query failed for title pattern '%s' author pattern '%s'",
-                    title,
-                    author,
+                    f"Hardcover query failed for title pattern '{title}' author pattern '{author}'"
                 )
                 return None
 
         if not results:
             LOGGER.info(
-                "Hardcover query returned no results for title pattern '%s' and author pattern '%s'",
-                title,
-                author,
+                f"Hardcover query returned no results for title pattern '{title}' and author pattern '{author}'"
             )
             return None
 

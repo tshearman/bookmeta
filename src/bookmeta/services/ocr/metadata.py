@@ -1,10 +1,8 @@
+import logging
 from pathlib import Path
 from typing import Dict
 
-import logging
-
 import fitz
-
 
 LOGGER = logging.getLogger("ocr.metadata")
 
@@ -14,7 +12,7 @@ def load_pdf_metadata(pdf_path: str | Path):
     path = Path(pdf_path)
     with fitz.open(path) as doc:
         meta = doc.metadata or {}
-    LOGGER.debug("Raw PDF metadata for %s: %s", path, meta)
+        LOGGER.debug(f"Raw PDF metadata for {path}: {meta}")
     return meta
 
 

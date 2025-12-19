@@ -13,13 +13,12 @@ from .pdf_ocr_results import OCRedPage, PdfOcrResults, build_combined_ocr_text
 from .rendering import page_to_image
 from .sampling import sample_page_indices
 
-
 LOGGER = logging.getLogger("ocr.pipeline")
 
 
 def _log_info(message: str) -> None:
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    LOGGER.info("[OCRPipeline %s] %s", timestamp, message)
+    LOGGER.info(f"[OCRPipeline {timestamp}] {message}")
 
 
 OcrPipeline = Callable[[str | Path], PdfOcrResults]

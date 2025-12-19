@@ -41,7 +41,7 @@ _ensure_check_array_support()
 def get_keywords_by_pdf_hash(db_path: Path | str = DEFAULT_DB_PATH) -> pd.DataFrame:
     path = Path(db_path)
     _ensure_db(path)
-    LOGGER.info("Loading keywords from %s", path)
+    LOGGER.info(f"Loading keywords from {path}")
     conn = sqlite3.connect(path)
     try:
         df = pd.read_sql_query(
@@ -49,9 +49,9 @@ def get_keywords_by_pdf_hash(db_path: Path | str = DEFAULT_DB_PATH) -> pd.DataFr
         )
     finally:
         conn.close()
-    LOGGER.info("Read %d rows in dataframe from %s", len(df), path)
+    LOGGER.info(f"Read {len(df)} rows in dataframe from {path}")
     if df.empty:
-        LOGGER.warning("No pipeline runs found in %s", path)
+        LOGGER.warning(f"No pipeline runs found in {path}")
         return pd.DataFrame(
             columns=[
                 "pdf_hash",
@@ -138,7 +138,7 @@ def generate_keyword_embeddings(
             try:
                 embedding = future.result()
             except Exception as exc:
-                LOGGER.exception("Failed to embed keyword '%s'", keyword)
+                LOGGER.exception(f"Failed to embed keyword '{keyword}'")
                 raise RuntimeError(
                     f"Failed to embed keyword '{keyword}': {exc}"
                 ) from exc

@@ -1,7 +1,7 @@
 from typing import Callable, Literal
 
-from .book_info_response import BookInfoResponse
 from ..ocr.pdf_ocr_results import PdfOcrResults
+from .book_info_response import BookInfoResponse
 
 Provider = Literal["ollama", "openai"]
 DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
