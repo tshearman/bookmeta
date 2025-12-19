@@ -1,6 +1,6 @@
 # TODO
 
-- [ ] **Integrate AMZ Book Search**  
+- [/] **Integrate AMZ Book Search**  
   - **Owner:** @toby  
   - **Priority:** Medium  
 
