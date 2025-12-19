@@ -33,6 +33,7 @@ from bookmeta.services.ocr.ocr import (
     ollama_ocr_method,
     tesseract_ocr_method,
 )
+from bookmeta.services.ocr.pdf_ocr_results import PdfOcrResults
 from bookmeta.services.ocr.pipeline import (
     OcrPipelineConfig,
     generate_pipeline as generate_ocr_pipeline,
@@ -49,6 +50,10 @@ class PipelineConfig:
     extraction_config: BookInfoPipelineConfig
     selection_config: BookInfoSelectionPipelineConfig
     booksearch_config: BookSearchPipelineConfig
+
+
+class NoOcrTextError(RuntimeError):
+    """Raised when no OCR method extracted any text from a PDF."""
 
 
 LOGGER = logging.getLogger(__name__)
@@ -152,6 +157,19 @@ def _client_config_for(provider: str, secrets: dict[str, Any]) -> dict[str, Any]
     raise ValueError(f"Unsupported provider: {provider}")
 
 
+def _has_ocr_text(ocr_results: PdfOcrResults) -> bool:
+    combined = (ocr_results.combined_text or "").strip()
+    if combined:
+        return True
+    pages = ocr_results.ocr_results
+    for page in pages:
+        for result in page.ocr_results:
+            text = result.text
+            if text and text.strip():
+                return True
+    return False
+
+
 def _default_booksearch_methods(
     args: argparse.Namespace, secrets: dict[str, Any]
 ) -> list[BookSearchMethod]:
@@ -219,6 +237,9 @@ def pipeline(config: PipelineConfig) -> BookMetaPipeline:
 
     def _inner_(pdf_path: Path) -> DetailedBookInfo:
         ocr_results = ocr_pipeline(pdf_path)
+        if not _has_ocr_text(ocr_results):
+            LOGGER.warning("Skipping %s because OCR produced no text.", pdf_path)
+            raise NoOcrTextError(f"No OCR text extracted for {pdf_path}")
         search_results = search_pipeline(info_pipeline(ocr_results))
         return selection_pipeline(ocr_results, search_results)
 
@@ -232,7 +253,7 @@ def execute_pipeline(
     return pipeline(config)(pdf)
 
 
-def main():
+def main() -> DetailedBookInfo | None:
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
     secrets = _read_secrets(args.secrets)
@@ -240,7 +261,11 @@ def main():
 
     config_signature = json.dumps(serialize_pipeline_config(config), sort_keys=True)
     logging.info("Running pipeline on %s", args.pdf_path)
-    final_info = execute_pipeline(args.pdf_path, config, config_signature)
+    try:
+        final_info = execute_pipeline(args.pdf_path, config, config_signature)
+    except NoOcrTextError as exc:
+        logging.warning("Skipping %s: %s", args.pdf_path, exc)
+        return None
     logging.info("Final BookInfo:\n%s", final_info)
 
     try:
@@ -252,5 +277,6 @@ def main():
 
 
 if __name__ == "__main__":
-    out: DetailedBookInfo = main()
-    print(json.dumps(out.model_dump(), indent=2))
+    out = main()
+    if out is not None:
+        print(json.dumps(out.model_dump(), indent=2))

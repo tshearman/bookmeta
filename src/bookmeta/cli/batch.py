@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from bookmeta.cli.pipeline import (
+    NoOcrTextError,
     PipelineConfig,
     _read_secrets,
     build_pipeline_config,
@@ -18,6 +19,7 @@ from bookmeta.data.sqlite import (
     persist_run,
     serialize_pipeline_config,
 )
+from bookmeta.services.bookinfo.book_info import DetailedBookInfo
 
 
 def parse_args() -> argparse.Namespace:
@@ -109,11 +111,36 @@ def _discover_pdfs(root: Path) -> list[Path]:
     return sorted(path for path in root.rglob("*.pdf") if path.is_file())
 
 
+def _dedupe_pdfs(paths: list[Path]) -> list[Path]:
+    seen: dict[str, Path] = {}
+    duplicates = 0
+    unique: list[Path] = []
+    for pdf in paths:
+        pdf_hash = _compute_pdf_hash(pdf)
+        if pdf_hash in seen:
+            duplicates += 1
+            logging.info(
+                "Skipping duplicate PDF %s (same hash as %s)",
+                pdf,
+                seen[pdf_hash],
+            )
+            continue
+        seen[pdf_hash] = pdf
+        unique.append(pdf)
+    if duplicates:
+        logging.info("Deduplicated %d PDFs with identical hashes.", duplicates)
+    return unique
+
+
 def _process_pdf(
     pdf: Path, config: PipelineConfig, config_signature: str, results_db: Path
-) -> Any:
+) -> DetailedBookInfo | None:
     logging.info("Running pipeline on %s", pdf)
-    final_info = execute_pipeline(pdf, config, config_signature)
+    try:
+        final_info = execute_pipeline(pdf, config, config_signature)
+    except NoOcrTextError as exc:
+        logging.warning("Skipping %s: %s", pdf, exc)
+        return None
     logging.info("Final BookInfo for %s:\n%s", pdf, final_info)
     try:
         persist_run(results_db, pdf, config, final_info)
@@ -133,6 +160,13 @@ def main() -> dict[str, Any]:
     pdfs = _discover_pdfs(args.pdf_directory)
     if not pdfs:
         logging.warning("No PDFs found inside %s", args.pdf_directory)
+        return {"processed": {}, "failed": {}}
+    pdfs = _dedupe_pdfs(pdfs)
+    if not pdfs:
+        logging.warning(
+            "All discovered PDFs under %s were duplicates; nothing to process.",
+            args.pdf_directory,
+        )
         return {"processed": {}, "failed": {}}
 
     workers = max(1, args.workers)
@@ -158,6 +192,9 @@ def main() -> dict[str, Any]:
             pdf_hash = _compute_pdf_hash(pdf)
             try:
                 result = future.result()
+                if result is None:
+                    logging.info("No metadata produced for %s; nothing persisted.", pdf)
+                    continue
                 processed[pdf_hash] = {"input": str(pdf), "output": result.model_dump()}
             except Exception as exc:
                 logging.exception("Pipeline failed for %s", pdf)
