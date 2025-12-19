@@ -23,5 +23,7 @@
 - [X] **Update the metadata writer to only write the canonical keywords** 
   - **Owner:** @toby  
   - **Priority:** High
-  -   
-  
+
+- [ ] **Skip over PDFs that return None for all OCR methods** 
+  - **Owner:** @toby  
+  - **Priority:** High
