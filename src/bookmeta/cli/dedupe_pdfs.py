@@ -85,13 +85,23 @@ def _ensure_destination(dest: Path) -> Path:
     return dest.resolve()
 
 
-def _move_duplicates(duplicates: list[Path], dest: Path) -> None:
+def _move_duplicates(duplicates: list[Path], dest: Path, root: Path) -> None:
     dest = _ensure_destination(dest)
     for idx, pdf in enumerate(duplicates, start=1):
-        target = dest / pdf.name
+        try:
+            relative_pdf = pdf.relative_to(root)
+        except ValueError:
+            logging.warning(
+                "PDF %s is outside root %s; placing at destination root.", pdf, root
+            )
+            relative_pdf = Path(pdf.name)
+
+        target = dest / relative_pdf
+        target.parent.mkdir(parents=True, exist_ok=True)
+        base_target = target
         counter = 1
         while target.exists():
-            target = dest / f"{pdf.stem}_{counter}{pdf.suffix}"
+            target = base_target.parent / f"{base_target.stem}_{counter}{base_target.suffix}"
             counter += 1
         shutil.move(str(pdf), target)
         logging.info("Moved duplicate %s -> %s", pdf, target)
@@ -123,7 +133,7 @@ def main() -> int:
     if args.rm:
         _remove_duplicates(duplicates)
     else:
-        _move_duplicates(duplicates, args.dest)
+        _move_duplicates(duplicates, args.dest, args.pdf_directory)
 
     logging.info("Finished deduplicating PDFs.")
     return 0
