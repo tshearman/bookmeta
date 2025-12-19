@@ -15,6 +15,7 @@ from bookmeta.services.bookinfo.pipeline import (
     generate_pipeline as generate_bookinfo_pipeline,
 )
 from bookmeta.services.bookinfo.book_info import DetailedBookInfo
+from bookmeta.services.booksearch import BookSearchMethod
 from bookmeta.services.booksearch.pipeline import (
     BookSearchPipelineConfig,
     generate_pipeline as generate_booksearch_pipeline,
@@ -50,6 +51,7 @@ class PipelineConfig:
     booksearch_config: BookSearchPipelineConfig
 
 
+LOGGER = logging.getLogger(__name__)
 BookMetaPipeline = Callable[[Path], DetailedBookInfo]
 
 PDF_MEMORY = joblib.Memory(PIPELINE_CACHE_DIR, verbose=1)
@@ -150,6 +152,32 @@ def _client_config_for(provider: str, secrets: dict[str, Any]) -> dict[str, Any]
     raise ValueError(f"Unsupported provider: {provider}")
 
 
+def _default_booksearch_methods(
+    args: argparse.Namespace, secrets: dict[str, Any]
+) -> list[BookSearchMethod]:
+
+    methods: list[BookSearchMethod] = []
+    if "GOOGLE_BOOKS_API_KEY" in secrets:
+        api_key = secrets["GOOGLE_BOOKS_API_KEY"]
+        methods.append(
+            googlebooks_search(
+                GoogleBooksClientConfig(
+                    api_key=api_key, max_results=args.google_max_results
+                )
+            )
+        )
+
+    if "HARDCOVER_API_KEY" in secrets:
+        api_key = secrets["HARDCOVER_API_KEY"]
+        methods.append(
+            hardcover_search(
+                HardcoverClientConfig(api_key=api_key, per_page=args.hardcover_per_page)
+            )
+        )
+
+    return methods
+
+
 def build_pipeline_config(
     args: argparse.Namespace, secrets: dict[str, Any]
 ) -> PipelineConfig:
@@ -172,25 +200,7 @@ def build_pipeline_config(
         client_config=_client_config_for(args.selection_provider, secrets),
         model=args.selection_model,
     )
-    api_key = secrets["GOOGLE_BOOKS_API_KEY"]
-    methods = [
-        googlebooks_search(
-            GoogleBooksClientConfig(
-                api_key=api_key,
-                max_results=args.google_max_results,
-            )
-        )
-    ]
-    hardcover_api_key = secrets.get("HARDCOVER_API_KEY")
-    if hardcover_api_key:
-        methods.append(
-            hardcover_search(
-                HardcoverClientConfig(
-                    api_key=hardcover_api_key,
-                    per_page=args.hardcover_per_page,
-                )
-            )
-        )
+    methods = _default_booksearch_methods(args, secrets)
     booksearch_config = BookSearchPipelineConfig(search_methods=methods)
 
     return PipelineConfig(
