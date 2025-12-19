@@ -16,11 +16,6 @@ from .sampling import sample_page_indices
 LOGGER = logging.getLogger("ocr.pipeline")
 
 
-def _log_info(message: str) -> None:
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    LOGGER.info(f"[OCRPipeline {timestamp}] {message}")
-
-
 OcrPipeline = Callable[[str | Path], PdfOcrResults]
 DEFAULT_OCR_METHODS: tuple[OcrMethod, ...] = (
     native_ocr_method,
@@ -30,8 +25,8 @@ DEFAULT_OCR_METHODS: tuple[OcrMethod, ...] = (
 
 @dataclass
 class OcrPipelineConfig:
-    num_first_pages: int = 3
-    num_last_pages: int = 1
+    num_first_pages: int = 5
+    num_last_pages: int = 3
     ocr_methods: Sequence[OcrMethod] = DEFAULT_OCR_METHODS
 
 
@@ -54,8 +49,8 @@ def process_page(
 
 def pdf_ocr_pipeline(
     pdf_path: str | Path,
-    num_first_pages: int = 3,
-    num_last_pages: int = 1,
+    num_first_pages: int,
+    num_last_pages: int,
     ocr_methods: Sequence[OcrMethod] | None = None,
 ) -> PdfOcrResults:
     source_path = Path(pdf_path)

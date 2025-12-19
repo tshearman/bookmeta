@@ -27,8 +27,8 @@ def page_is_blank(
 
 def sample_page_indices(
     doc: fitz.Document,
-    num_first_pages: int = 3,
-    num_last_pages: int = 1,
+    num_first_pages: int,
+    num_last_pages: int,
 ) -> List[int]:
     n_pages = len(doc)
     if n_pages <= 0:
