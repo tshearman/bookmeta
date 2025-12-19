@@ -3,7 +3,6 @@ from typing import Callable, cast
 import fitz
 import ollama
 from openai import OpenAI
-import pytesseract
 
 from bookmeta.services.llm import (
     cached_ollama_chat,

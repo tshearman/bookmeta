@@ -23,6 +23,10 @@ from bookmeta.services.booksearch.providers.googlebooks import (
     GoogleBooksClientConfig,
     googlebooks_search,
 )
+from bookmeta.services.booksearch.providers.hardcover import (
+    HardcoverClientConfig,
+    hardcover_search,
+)
 from bookmeta.services.ocr.ocr import (
     native_ocr_method,
     ollama_ocr_method,
@@ -109,6 +113,12 @@ def parse_args() -> argparse.Namespace:
         help="Maximum Google Books results to fetch during book search.",
     )
     parser.add_argument(
+        "--hardcover-per-page",
+        type=int,
+        default=5,
+        help="Maximum Hardcover results per query.",
+    )
+    parser.add_argument(
         "--results-db",
         type=Path,
         default=DEFAULT_DB_PATH,
@@ -171,6 +181,16 @@ def build_pipeline_config(
             )
         )
     ]
+    hardcover_api_key = secrets.get("HARDCOVER_API_KEY")
+    if hardcover_api_key:
+        methods.append(
+            hardcover_search(
+                HardcoverClientConfig(
+                    api_key=hardcover_api_key,
+                    per_page=args.hardcover_per_page,
+                )
+            )
+        )
     booksearch_config = BookSearchPipelineConfig(search_methods=methods)
 
     return PipelineConfig(

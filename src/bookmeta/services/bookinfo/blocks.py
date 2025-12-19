@@ -24,6 +24,17 @@ def construct_blocks(
     }
     blocks["images"] = []
     blocks["ocr"] = []
+
+    metadata_values = pdf_result.metadata
+    metadata_lines = [
+        f"{key.title()}: {value}" for key, value in metadata_values.items() if value
+    ]
+    if metadata_lines:
+        blocks["metadata"] = {
+            "type": "input_text",
+            "text": "PDF METADATA\n" + "\n".join(metadata_lines),
+        }
+
     for page in pdf_result.ocr_results:
         blocks["images"].append(
             {
@@ -44,7 +55,7 @@ def construct_blocks(
 
 
 def get_text_blocks(blocks: dict[str, Any]) -> list[dict[str, Any]]:
-    return [blocks["prompt"], blocks["path"]] + blocks["ocr"]
+    return [blocks["prompt"], blocks["path"], blocks["metadata"]] + blocks["ocr"]
 
 
 def get_img_blocks(blocks: dict[str, Any]) -> list[dict[str, Any]]:

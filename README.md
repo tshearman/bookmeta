@@ -19,7 +19,7 @@ source .venv/bin/activate
 uv pip install -e .[dev]
 ```
 
-Before running CLI commands, make sure you have the required SQLite database and secrets configured (`resources/bookmeta.db`, `secrets.json`).
+Before running CLI commands, make sure you have the required SQLite database and secrets configured (`resources/bookmeta.db`, `secrets.json`). The secrets file should include your existing API keys and, if you plan to use the Hardcover provider, a `HARDCOVER_API_KEY`.
 
 ## CLI usage
 
@@ -70,8 +70,11 @@ To hack on the Java tools, step into `tools/java/` and use the shared Gradle wra
 The repository ships two companion JVM CLIs (`pdf-metadata-extractor-cli` and `pdf-metadata-writer-cli`) that reuse the PdfBox/Jackson helpers under `tools/java/pdf-metadata-core`. They target Java 21 via the Gradle toolchain so you do not need to install Gradle or juggle different JDK versions—just ensure a JDK 21 runtime is available.
 
 - **Build from source** – change into `tools/java/` and run `./gradlew build` to compile every module and execute their tests. You can also build a single CLI, e.g. `./gradlew :pdf-metadata-extractor-cli:build`.
+
 - **Install runnable distributions** – run `./gradlew :pdf-metadata-extractor-cli:installDist` (or swap in `pdf-metadata-writer-cli`). The Application plugin writes launch scripts under `tools/java/<module>/build/install/<module>/bin/`. Add those binaries to your PATH or call them via their absolute paths.
+
 - **Run directly with Gradle** – when iterating locally, `./gradlew :pdf-metadata-extractor-cli:run --args="/path/book.pdf --cover /tmp/cover.jpg"` prints pretty JSON metadata (and an optional JPEG cover). The writer CLI mirrors the extractor syntax but expects an input PDF, destination, and metadata JSON: `./gradlew :pdf-metadata-writer-cli:run --args="/path/original.pdf /tmp/output.pdf /path/metadata.json"`.
+
 - **Package as archives** – `./gradlew :pdf-metadata-extractor-cli:distZip` or `distTar` produces self-contained archives that you can copy to other machines. Extract them and invoke the `bin/` scripts as above.
 
 Each CLI directory contains a focused README with more usage examples and flag descriptions.

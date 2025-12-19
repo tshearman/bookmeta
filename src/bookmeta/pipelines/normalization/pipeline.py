@@ -1,14 +1,15 @@
-from __future__ import annotations
-
 import argparse
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 import json
 import logging
+import os
 import sqlite3
+import subprocess
+import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from threading import Lock
-from typing import Iterable
+from typing import Any, Iterable
 
 import joblib
 import pandas as pd
@@ -16,7 +17,6 @@ from tqdm.auto import tqdm
 
 from bookmeta.config.settings import DEFAULT_DB_PATH, NORMALIZE_CACHE_DIR
 from bookmeta.data.sqlite import _compute_pdf_hash
-from bookmeta.metadata.writer import MetadataHelper, embed_metadata, ensure_copy
 from bookmeta.pipelines.normalization.keywords import (
     agglomerative_cluster_keywords,
     assign_canonical_keywords_per_cluster,
@@ -29,6 +29,28 @@ from bookmeta.pipelines.normalization.publisher import normalize_publisher
 LOGGER = logging.getLogger(__name__)
 FAILURE_LOG_LOCK = Lock()
 NORMALIZE_CACHE = joblib.Memory(NORMALIZE_CACHE_DIR, verbose=0)
+WRITER_ENV_VAR = "BOOKMETA_WRITER_BIN"
+WRITER_FALLBACK = Path(
+    "tools/java/pdf-metadata-writer-cli/build/install/pdf-metadata-writer-cli/bin/pdf-metadata-writer-cli"
+)
+
+
+def _writer_binary(cli_path: Path | None = None) -> Path:
+    if cli_path is not None:
+        return cli_path
+    override = os.environ.get(WRITER_ENV_VAR)
+    candidates: list[Path] = []
+    if override:
+        candidates.append(Path(override).expanduser())
+    candidates.append(WRITER_FALLBACK.resolve())
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(
+        "Path to pdf-metadata-writer CLI not provided. "
+        "Pass --writer-bin, set BOOKMETA_WRITER_BIN, or run "
+        "tools/java/gradlew :pdf-metadata-writer-cli:installDist."
+    )
 
 
 def _flatten_keywords(keyword_sets: Iterable[Iterable[str]]) -> list[str]:
@@ -113,10 +135,6 @@ def _normalize_keywords_pipeline_cached(
 
     df = df.copy()
     df["canonical_keywords"] = df["keywords"].apply(_map_keywords)
-    df["keywords"] = df["keywords"].apply(
-        lambda keywords: sorted(keywords) if isinstance(keywords, set) else keywords
-    )
-    df["keywords"] = df["keywords"].apply(json.dumps)
     df["canonical_keywords"] = df["canonical_keywords"].apply(json.dumps)
     LOGGER.info("Assigned canonical keywords for all rows")
 
@@ -270,6 +288,57 @@ def _collect_pdfs(pdf_path: Path) -> list[Path]:
     return sorted(pdf_path.rglob("*.pdf"))
 
 
+def _writer_payload(entity: BookMetadataEntity) -> dict[str, Any]:
+    def _list_or_none(values: list[str]) -> list[str] | None:
+        cleaned = [value for value in values if value]
+        return cleaned or None
+
+    payload: dict[str, Any] = {
+        "title": entity.title,
+        "subtitle": entity.subtitle,
+        "description": entity.description,
+        "publisher": entity.publisher,
+        "authors": _list_or_none(entity.authors),
+        "categories": _list_or_none(entity.categories) or _list_or_none(entity.tags),
+        "tags": _list_or_none(entity.tags),
+        "isbn10": entity.isbn10,
+        "isbn13": entity.isbn13,
+    }
+    return {key: value for key, value in payload.items() if value}
+
+
+def _write_metadata_with_cli(
+    source_pdf: Path,
+    destination_pdf: Path,
+    payload: dict[str, Any],
+    writer_bin: Path,
+) -> None:
+    with tempfile.NamedTemporaryFile(
+        "w", suffix=".json", delete=False, encoding="utf-8"
+    ) as tmp:
+        json.dump(payload, tmp, ensure_ascii=False)
+        metadata_path = Path(tmp.name)
+    try:
+        subprocess.run(
+            [
+                str(writer_bin),
+                str(source_pdf),
+                str(destination_pdf),
+                str(metadata_path),
+            ],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"pdf-metadata-writer CLI failed: {exc.stderr or exc.stdout}"
+        ) from exc
+    finally:
+        metadata_path.unlink(missing_ok=True)
+
+
 def _process_pdf(
     pdf_path: Path,
     metadata_by_hash: dict[str, BookMetadataEntity],
@@ -277,6 +346,7 @@ def _process_pdf(
     output_dir: Path,
     failure_log: Path,
     pdf_root: Path,
+    writer_bin: Path,
 ) -> None:
     try:
         relative = pdf_path.relative_to(pdf_root)
@@ -308,12 +378,13 @@ def _process_pdf(
         LOGGER.warning("No metadata available for %s (hash=%s)", pdf_path, pdf_hash)
         return
 
-    helper = MetadataHelper(asdict(entity))
+    metadata_payload = _writer_payload(entity)
+    if not metadata_payload:
+        LOGGER.warning("No metadata fields to embed for %s", pdf_path)
+        return
     try:
-        copied_pdf = ensure_copy(pdf_path, target_dir)
-        embed_metadata(copied_pdf, helper)
-        embed_metadata(copied_pdf, helper)
-        LOGGER.info("Embedded metadata for %s into %s", pdf_path, copied_pdf)
+        _write_metadata_with_cli(pdf_path, target_pdf, metadata_payload, writer_bin)
+        LOGGER.info("Embedded metadata for %s into %s", pdf_path, target_pdf)
     except Exception as exc:
         LOGGER.error("Failed processing %s: %s", pdf_path, exc)
         with FAILURE_LOG_LOCK:
@@ -328,6 +399,7 @@ def run_metadata_writer(
     pdf_path: Path,
     output_dir: Path,
     *,
+    writer_bin: Path | None = None,
     workers: int = 4,
     n_clusters=750,
 ) -> None:
@@ -350,6 +422,8 @@ def run_metadata_writer(
     failure_log.write_text("", encoding="utf-8")
     pdf_root = pdf_path if pdf_path.is_dir() else pdf_path.parent
 
+    resolved_writer = _writer_binary(writer_bin)
+
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
             executor.submit(
@@ -360,6 +434,7 @@ def run_metadata_writer(
                 output_dir,
                 failure_log,
                 pdf_root,
+                resolved_writer,
             )
             for pdf in pdfs
         ]
@@ -407,6 +482,12 @@ def main() -> None:
         default="INFO",
         help="Logging level (DEBUG, INFO, WARNING, ERROR).",
     )
+    parser.add_argument(
+        "--writer-bin",
+        type=Path,
+        default=None,
+        help="Path to the pdf-metadata-writer CLI binary (or set BOOKMETA_WRITER_BIN).",
+    )
     args = parser.parse_args()
 
     log_level = getattr(logging, args.log_level.upper(), logging.INFO)
@@ -417,6 +498,7 @@ def main() -> None:
         db_path=args.db_path,
         pdf_path=args.pdf_path.resolve(),
         output_dir=args.output_dir.resolve(),
+        writer_bin=args.writer_bin,
         workers=args.workers,
     )
 

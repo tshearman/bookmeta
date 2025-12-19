@@ -26,7 +26,6 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.LocalDate;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
 import java.util.Calendar;
@@ -133,14 +132,16 @@ public class PdfMetadataAugmenter {
         DocumentBuilder builder = factory.newDocumentBuilder();
         Document doc = builder.parse(new ByteArrayInputStream(xmpBytes));
 
-        Element rdfRoot = (Element) doc.getElementsByTagNameNS("http://www.w3.org/1999/02/22-rdf-syntax-ns#", "RDF").item(0);
+        Element rdfRoot = (Element) doc.getElementsByTagNameNS("http://www.w3.org/1999/02/22-rdf-syntax-ns#", "RDF")
+                .item(0);
         if (rdfRoot == null) {
             throw new IllegalStateException("RDF root missing in XMP");
         }
 
         Element rdfDescription = doc.createElementNS("http://www.w3.org/1999/02/22-rdf-syntax-ns#", "rdf:Description");
         rdfDescription.setAttributeNS("http://www.w3.org/2000/xmlns/", "xmlns:xmp", "http://ns.adobe.com/xap/1.0/");
-        rdfDescription.setAttributeNS("http://www.w3.org/2000/xmlns/", "xmlns:xmpidq", "http://ns.adobe.com/xmp/Identifier/qual/1.0/");
+        rdfDescription.setAttributeNS("http://www.w3.org/2000/xmlns/", "xmlns:xmpidq",
+                "http://ns.adobe.com/xmp/Identifier/qual/1.0/");
         rdfDescription.setAttributeNS("http://www.w3.org/1999/02/22-rdf-syntax-ns#", "rdf:about", "");
 
         Element xmpIdentifier = doc.createElementNS("http://ns.adobe.com/xap/1.0/", "xmp:Identifier");
@@ -170,9 +171,12 @@ public class PdfMetadataAugmenter {
         rdfRoot.appendChild(rdfDescription);
 
         if (metadata.getSeriesName() != null) {
-            Element calibreDescription = doc.createElementNS("http://www.w3.org/1999/02/22-rdf-syntax-ns#", "rdf:Description");
-            calibreDescription.setAttributeNS("http://www.w3.org/2000/xmlns/", "xmlns:calibre", "http://calibre-ebook.com/xmp-namespace");
-            calibreDescription.setAttributeNS("http://www.w3.org/2000/xmlns/", "xmlns:calibreSI", "http://calibre-ebook.com/xmp-namespace-series-index");
+            Element calibreDescription = doc.createElementNS("http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+                    "rdf:Description");
+            calibreDescription.setAttributeNS("http://www.w3.org/2000/xmlns/", "xmlns:calibre",
+                    "http://calibre-ebook.com/xmp-namespace");
+            calibreDescription.setAttributeNS("http://www.w3.org/2000/xmlns/", "xmlns:calibreSI",
+                    "http://calibre-ebook.com/xmp-namespace-series-index");
             calibreDescription.setAttributeNS("http://www.w3.org/1999/02/22-rdf-syntax-ns#", "rdf:about", "");
 
             Element seriesElem = doc.createElementNS("http://calibre-ebook.com/xmp-namespace", "calibre:series");
@@ -183,7 +187,8 @@ public class PdfMetadataAugmenter {
             seriesElem.appendChild(valueElem);
 
             Float seriesIndex = metadata.getSeriesNumber();
-            Element indexElem = doc.createElementNS("http://calibre-ebook.com/xmp-namespace-series-index", "calibreSI:series_index");
+            Element indexElem = doc.createElementNS("http://calibre-ebook.com/xmp-namespace-series-index",
+                    "calibreSI:series_index");
             indexElem.setTextContent(seriesIndex != null ? String.format("%.2f", seriesIndex) : "0.00");
             seriesElem.appendChild(indexElem);
 
@@ -237,8 +242,7 @@ public class PdfMetadataAugmenter {
             Document doc2 = builder.parse(new ByteArrayInputStream(newBytes));
             return !Objects.equals(
                     doc1.getDocumentElement().getTextContent().trim(),
-                    doc2.getDocumentElement().getTextContent().trim()
-            );
+                    doc2.getDocumentElement().getTextContent().trim());
         } catch (Exception e) {
             log.warn("XMP diff failed: {}", e.getMessage());
             return true;
