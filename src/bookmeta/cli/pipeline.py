@@ -253,27 +253,34 @@ def execute_pipeline(
     return pipeline(config)(pdf)
 
 
+def process_pdf(
+    pdf: Path,
+    config: PipelineConfig,
+    results_db: Path,
+) -> DetailedBookInfo | None:
+    LOGGER.info("Running pipeline on %s", pdf)
+    config_signature = json.dumps(serialize_pipeline_config(config), sort_keys=True)
+    try:
+        final_info = execute_pipeline(pdf, config, config_signature)
+    except NoOcrTextError as exc:
+        LOGGER.warning(f"Skipping {pdf}: {exc}")
+        return
+
+    LOGGER.info(f"Final BookInfo for {pdf}:\n{final_info}")
+    try:
+        persist_run(results_db, pdf, config, final_info)
+        LOGGER.info(f"Persisted pipeline run to {results_db} for {pdf}")
+    except Exception:
+        LOGGER.exception(f"Failed to persist pipeline run for {pdf}")
+    return final_info
+
+
 def main() -> DetailedBookInfo | None:
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
     secrets = _read_secrets(args.secrets)
     config = build_pipeline_config(args, secrets)
-
-    config_signature = json.dumps(serialize_pipeline_config(config), sort_keys=True)
-    logging.info("Running pipeline on %s", args.pdf_path)
-    try:
-        final_info = execute_pipeline(args.pdf_path, config, config_signature)
-    except NoOcrTextError as exc:
-        logging.warning("Skipping %s: %s", args.pdf_path, exc)
-        return None
-    logging.info("Final BookInfo:\n%s", final_info)
-
-    try:
-        persist_run(args.results_db, args.pdf_path, config, final_info)
-        logging.info("Persisted pipeline run to %s", args.results_db)
-    except Exception:
-        logging.exception("Failed to persist pipeline run.")
-    return final_info
+    return process_pdf(args.pdf_path, config, args.results_db)
 
 
 if __name__ == "__main__":

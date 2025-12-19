@@ -7,19 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from bookmeta.cli.pipeline import (
-    NoOcrTextError,
     PipelineConfig,
     _read_secrets,
     build_pipeline_config,
-    execute_pipeline,
+    process_pdf,
 )
 from bookmeta.config.settings import DEFAULT_DB_PATH
-from bookmeta.data.sqlite import (
-    _compute_pdf_hash,
-    persist_run,
-    serialize_pipeline_config,
-)
-from bookmeta.services.bookinfo.book_info import DetailedBookInfo
+from bookmeta.data.sqlite import _compute_pdf_hash, serialize_pipeline_config
 
 
 def parse_args() -> argparse.Namespace:
@@ -120,34 +114,14 @@ def _dedupe_pdfs(paths: list[Path]) -> list[Path]:
         if pdf_hash in seen:
             duplicates += 1
             logging.info(
-                "Skipping duplicate PDF %s (same hash as %s)",
-                pdf,
-                seen[pdf_hash],
+                f"Skipping duplicate PDF {pdf} (same hash as {seen[pdf_hash]})"
             )
-            continue
-        seen[pdf_hash] = pdf
-        unique.append(pdf)
+        else:
+            seen[pdf_hash] = pdf
+            unique.append(pdf)
     if duplicates:
-        logging.info("Deduplicated %d PDFs with identical hashes.", duplicates)
+        logging.info(f"Deduplicated {duplicates} PDFs with identical hashes.")
     return unique
-
-
-def _process_pdf(
-    pdf: Path, config: PipelineConfig, config_signature: str, results_db: Path
-) -> DetailedBookInfo | None:
-    logging.info("Running pipeline on %s", pdf)
-    try:
-        final_info = execute_pipeline(pdf, config, config_signature)
-    except NoOcrTextError as exc:
-        logging.warning("Skipping %s: %s", pdf, exc)
-        return None
-    logging.info("Final BookInfo for %s:\n%s", pdf, final_info)
-    try:
-        persist_run(results_db, pdf, config, final_info)
-        logging.info("Persisted pipeline run to %s for %s", results_db, pdf)
-    except Exception:
-        logging.exception("Failed to persist pipeline run for %s", pdf)
-    return final_info
 
 
 def main() -> dict[str, Any]:
@@ -155,7 +129,6 @@ def main() -> dict[str, Any]:
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
     secrets = _read_secrets(args.secrets)
     config = build_pipeline_config(args, secrets)
-    config_signature = json.dumps(serialize_pipeline_config(config), sort_keys=True)
 
     pdfs = _discover_pdfs(args.pdf_directory)
     if not pdfs:
@@ -182,9 +155,7 @@ def main() -> dict[str, Any]:
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(
-                _process_pdf, pdf, config, config_signature, args.results_db
-            ): pdf
+            executor.submit(process_pdf, pdf, config, args.results_db): pdf
             for pdf in pdfs
         }
         for future in as_completed(futures):
