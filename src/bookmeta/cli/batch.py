@@ -28,13 +28,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num-front-ocr-pages",
         type=int,
-        default=3,
+        default=5,
         help="Number of front pages to OCR.",
     )
     parser.add_argument(
         "--num-back-ocr-pages",
         type=int,
-        default=2,
+        default=3,
         help="Number of ending pages to OCR.",
     )
     parser.add_argument(
