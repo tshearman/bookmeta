@@ -26,6 +26,7 @@ BookSearchPipeline = Callable[[BookInfoResponse], BookSearchResults]
 @dataclass
 class BookSearchPipelineConfig:
     search_methods: Sequence[BookSearchMethod]
+    num_responses: int
 
 
 def _method_name(method: BookSearchMethod) -> str:

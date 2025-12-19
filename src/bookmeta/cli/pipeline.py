@@ -74,14 +74,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num-front-ocr-pages",
         type=int,
-        default=3,
-        help="Path to secrets JSON with API keys.",
+        default=5,
+        help="Number of pages from the front of the document to process.",
     )
     parser.add_argument(
         "--num-back-ocr-pages",
         type=int,
-        default=2,
-        help="Path to secrets JSON with API keys.",
+        default=3,
+        help="Number of pages from the back of the document to process.",
     )
     parser.add_argument(
         "--ocr-ollama-model",
@@ -112,16 +112,10 @@ def parse_args() -> argparse.Namespace:
         help="Optional model override for the BookInfo selection stage.",
     )
     parser.add_argument(
-        "--google-max-results",
+        "--search-max-results",
         type=int,
         default=3,
-        help="Maximum Google Books results to fetch during book search.",
-    )
-    parser.add_argument(
-        "--hardcover-per-page",
-        type=int,
-        default=5,
-        help="Maximum Hardcover results per query.",
+        help="Maximum Book Search results to fetch during book search.",
     )
     parser.add_argument(
         "--results-db",
@@ -178,7 +172,7 @@ def _default_booksearch_methods(
         methods.append(
             googlebooks_search(
                 GoogleBooksClientConfig(
-                    api_key=api_key, max_results=args.google_max_results
+                    api_key=api_key, max_results=args.search_max_results
                 )
             )
         )
@@ -187,7 +181,7 @@ def _default_booksearch_methods(
         api_key = secrets["HARDCOVER_API_KEY"]
         methods.append(
             hardcover_search(
-                HardcoverClientConfig(api_key=api_key, per_page=args.hardcover_per_page)
+                HardcoverClientConfig(api_key=api_key, per_page=args.search_max_results)
             )
         )
 
@@ -217,7 +211,9 @@ def build_pipeline_config(
         model=args.selection_model,
     )
     methods = _default_booksearch_methods(args, secrets)
-    booksearch_config = BookSearchPipelineConfig(search_methods=methods)
+    booksearch_config = BookSearchPipelineConfig(
+        search_methods=methods, num_responses=args.search_max_results
+    )
 
     return PipelineConfig(
         ocr_config=ocr_config,

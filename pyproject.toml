@@ -40,6 +40,7 @@ dev = [
 bookmeta = "bookmeta.cli.pipeline:main"
 bookmeta-batch = "bookmeta.cli.batch:main"
 bookmeta-normalize = "bookmeta.pipelines.normalization.pipeline:main"
+bookmeta-dedupe = "bookmeta.cli.dedupe_pdfs:main"
 
 [project.urls]
 homepage = "https://github.com/tshearman/bookmeta"
