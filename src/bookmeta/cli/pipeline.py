@@ -11,12 +11,16 @@ import ollama
 from bookmeta.config.settings import DEFAULT_DB_PATH, PIPELINE_CACHE_DIR
 from bookmeta.data.sqlite import persist_run, serialize_pipeline_config
 from bookmeta.services.bookinfo.book_info import DetailedBookInfo
-from bookmeta.services.bookinfo.pipeline import BookInfoPipelineConfig
+from bookmeta.services.bookinfo.pipeline import (
+    BookInfoPipelineConfig,
+)
 from bookmeta.services.bookinfo.pipeline import (
     generate_pipeline as generate_bookinfo_pipeline,
 )
 from bookmeta.services.booksearch import BookSearchMethod
-from bookmeta.services.booksearch.pipeline import BookSearchPipelineConfig
+from bookmeta.services.booksearch.pipeline import (
+    BookSearchPipelineConfig,
+)
 from bookmeta.services.booksearch.pipeline import (
     generate_pipeline as generate_booksearch_pipeline,
 )
@@ -57,7 +61,7 @@ class NoOcrTextError(RuntimeError):
 LOGGER = logging.getLogger(__name__)
 BookMetaPipeline = Callable[[Path], DetailedBookInfo]
 
-PDF_MEMORY = joblib.Memory(PIPELINE_CACHE_DIR, verbose=1)
+PDF_MEMORY = joblib.Memory(PIPELINE_CACHE_DIR, verbose=0)
 
 
 def parse_args() -> argparse.Namespace:
@@ -125,7 +129,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--log-level",
-        default="INFO",
+        default="ERROR",
         help="Logging level (DEBUG, INFO, WARN, ERROR).",
     )
     return parser.parse_args()

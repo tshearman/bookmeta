@@ -7,8 +7,7 @@ from bookmeta.config.settings import CACHE_ROOT
 
 LLM_CACHE_DIR = CACHE_ROOT / "llm_calls"
 LLM_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-# Setting verbose>=20 enables joblib's info-level logging hooks
-LLM_MEMORY = Memory(str(LLM_CACHE_DIR), verbose=20)
+LLM_MEMORY = Memory(str(LLM_CACHE_DIR), verbose=0)
 
 
 @LLM_MEMORY.cache(ignore=["client"])

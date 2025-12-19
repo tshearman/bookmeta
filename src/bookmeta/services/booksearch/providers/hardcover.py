@@ -8,6 +8,10 @@ import httpx
 
 from bookmeta.services.bookinfo.book_info_response import BookInfoResponse
 from bookmeta.services.booksearch import BookSearchMethod
+from bookmeta.services.booksearch.providers.retry import (
+    is_retryable_httpx_error,
+    retryable_request,
+)
 
 LOGGER = logging.getLogger("booksearch.hardcover")
 
@@ -105,6 +109,7 @@ def _build_query_inputs(resp: BookInfoResponse) -> dict[str, str | None] | None:
     }
 
 
+@retryable_request(LOGGER)
 def _execute_books_query(
     client: httpx.Client,
     config: HardcoverClientConfig,
@@ -161,6 +166,23 @@ def hardcover_search(config: HardcoverClientConfig) -> BookSearchMethod:
                         title_pattern=title,
                         author_pattern=None,
                     )
+            except httpx.HTTPStatusError as exc:
+                status = exc.response.status_code
+                if is_retryable_httpx_error(exc):
+                    LOGGER.warning(
+                        "Hardcover request failed after retries with HTTP %s; skipping this search.",
+                        status,
+                    )
+                else:
+                    LOGGER.exception(
+                        f"Hardcover query failed for title pattern '{title}' author pattern '{author}'"
+                    )
+                return None
+            except httpx.RequestError:
+                LOGGER.warning(
+                    "Hardcover request failed after retries due to connection error; skipping this search."
+                )
+                return None
             except Exception:
                 LOGGER.exception(
                     f"Hardcover query failed for title pattern '{title}' author pattern '{author}'"

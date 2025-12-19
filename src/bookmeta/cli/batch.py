@@ -1,15 +1,51 @@
 import argparse
 import logging
 import os
+import subprocess
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
 from pathlib import Path
 from typing import Any, Iterator
 
+from tqdm.auto import tqdm
+
 from bookmeta.cli.pipeline import _read_secrets, build_pipeline_config, process_pdf
 from bookmeta.cli.utils import discover_pdfs
 from bookmeta.config.settings import DEFAULT_DB_PATH
 from bookmeta.data.sqlite import _compute_pdf_hash
+
+
+def _count_pdfs_with_ripgrep(pdf_directory: Path) -> int:
+    """Count PDFs using a small bash loop to avoid an in-Python directory walk."""
+    if not pdf_directory.exists():
+        raise RuntimeError(f"PDF directory does not exist: {pdf_directory}")
+    if not pdf_directory.is_dir():
+        raise RuntimeError(f"PDF directory is not a directory: {pdf_directory}")
+
+    cmd = (
+        "count=0; "
+        "while IFS= read -r _; do count=$((count+1)); done < <(rg --files -g '*.pdf' \"$1\"); "
+        "printf '%s' \"$count\""
+    )
+    try:
+        result = subprocess.run(
+            ["bash", "-lc", cmd, "_", str(pdf_directory)],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            "ripgrep (rg) is required to count PDFs but was not found on PATH."
+        ) from exc
+    except subprocess.CalledProcessError as exc:
+        error = (exc.stderr or "").strip()
+        raise RuntimeError(
+            f"Failed to count PDFs in {pdf_directory}: {error or exc}"
+        ) from exc
+
+    output = result.stdout.strip()
+    return int(output) if output else 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -70,7 +106,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--search-max-results",
         type=int,
-        default=3,
+        default=5,
         help="Maximum Books search results to fetch during book search per provider.",
     )
     parser.add_argument(
@@ -81,7 +117,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--log-level",
-        default="INFO",
+        default="ERROR",
         help="Logging level (DEBUG, INFO, WARN, ERROR).",
     )
     parser.add_argument(
@@ -109,6 +145,9 @@ def main() -> dict[str, Any]:
     config = build_pipeline_config(args, secrets)
 
     logging.info(f"Discovering pdfs in {args.pdf_directory}")
+    total_pdfs = _count_pdfs_with_ripgrep(args.pdf_directory)
+    logging.info(f"Found {total_pdfs} PDFs via ripgrep.")
+
     pdf_iter = discover_pdfs(args.pdf_directory)
     limited_pdf_iter = (
         islice(pdf_iter, args.max_pdfs) if args.max_pdfs is not None else pdf_iter
@@ -124,18 +163,29 @@ def main() -> dict[str, Any]:
             executor.submit(process_pdf, pdf, config, args.results_db): pdf
             for pdf in limited_pdf_iter
         }
-        for future in as_completed(futures):
-            pdf = futures[future]
-            pdf_hash = _compute_pdf_hash(pdf)
-            try:
-                result = future.result()
-                if result is None:
-                    logging.info(f"No metadata produced for {pdf}; nothing persisted.")
-                    continue
-                processed[pdf_hash] = {"input": str(pdf), "output": result.model_dump()}
-            except Exception as exc:
-                logging.exception(f"Pipeline failed for {pdf}")
-                failed[pdf_hash] = str(exc)
+        progress_total = (
+            total_pdfs if args.max_pdfs is None else min(total_pdfs, args.max_pdfs)
+        )
+        with tqdm(total=progress_total, desc="Processing PDFs", unit="pdf") as progress:
+            for future in as_completed(futures):
+                pdf = futures[future]
+                pdf_hash = _compute_pdf_hash(pdf)
+                try:
+                    result = future.result()
+                    if result is None:
+                        logging.info(
+                            f"No metadata produced for {pdf}; nothing persisted."
+                        )
+                        continue
+                    processed[pdf_hash] = {
+                        "input": str(pdf),
+                        "output": result.model_dump(),
+                    }
+                except Exception as exc:
+                    logging.exception(f"Pipeline failed for {pdf}")
+                    failed[pdf_hash] = str(exc)
+                finally:
+                    progress.update(1)
 
     summary = {"processed": processed, "failed": failed}
     return summary

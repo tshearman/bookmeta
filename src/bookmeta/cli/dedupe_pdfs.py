@@ -3,7 +3,6 @@ import logging
 import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor
-from itertools import chain
 from pathlib import Path
 from typing import Iterable
 
@@ -101,7 +100,9 @@ def _move_duplicates(duplicates: list[Path], dest: Path, root: Path) -> None:
         base_target = target
         counter = 1
         while target.exists():
-            target = base_target.parent / f"{base_target.stem}_{counter}{base_target.suffix}"
+            target = (
+                base_target.parent / f"{base_target.stem}_{counter}{base_target.suffix}"
+            )
             counter += 1
         shutil.move(str(pdf), target)
         logging.info("Moved duplicate %s -> %s", pdf, target)
