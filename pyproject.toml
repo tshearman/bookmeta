@@ -45,8 +45,8 @@ homepage = "https://github.com/tshearman/bookmeta"
 repository = "https://github.com/tshearman/bookmeta"
 issues = "https://github.com/tshearman/bookmeta/issues"
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=8.3.0",
     "ruff>=0.6.0",
 ]

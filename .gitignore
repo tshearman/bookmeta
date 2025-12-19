@@ -5,3 +5,5 @@ tests/fixtures/pdfs/output
 batch_failures.log
 tools/java/**/build/
 tools/java/**/.gradle/
+resources/
+src/bookmeta.egg-info/
