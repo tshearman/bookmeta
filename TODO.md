@@ -16,7 +16,7 @@
   - **Owner:** @toby  
   - **Priority:** High
 
-- [ ] **Harden the caching and database operations**  
+- [/] **Harden the caching and database operations**  
   - **Owner:** @toby  
   - **Priority:** High
 
@@ -24,6 +24,6 @@
   - **Owner:** @toby  
   - **Priority:** High
 
-- [ ] **Skip over PDFs that return None for all OCR methods** 
+- [X] **Skip over PDFs that return None for all OCR methods** 
   - **Owner:** @toby  
   - **Priority:** High

@@ -1,11 +1,9 @@
 import json
 from typing import Any, Callable, Sequence, Union
 
+from bookmeta.services.bookinfo.blocks import construct_blocks
+from bookmeta.services.bookinfo.blocks import get_text_blocks as bookinfo_text_blocks
 from bookmeta.services.bookinfo.book_info import BookInfo, DetailedBookInfo
-from bookmeta.services.bookinfo.blocks import (
-    construct_blocks,
-    get_text_blocks as bookinfo_text_blocks,
-)
 from bookmeta.services.booksearch.pipeline import BookSearchResults
 from bookmeta.services.ocr.pdf_ocr_results import PdfOcrResults
 

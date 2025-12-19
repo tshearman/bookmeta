@@ -1,14 +1,19 @@
+import re
 from typing import Iterable
 
 import pandas as pd
 from rapidfuzz import fuzz
 
-from bookmeta.pipelines.normalization import (
-    CORP_SUFFIX_PATTERN,
-    LEADING_ARTICLE_PATTERN,
-    LICENSE_SPLIT_PATTERN,
-)
 from bookmeta.pipelines.normalization.keywords import normalize_keyword
+
+CORP_SUFFIX_PATTERN = re.compile(
+    r"\b(?:incorporated|inc|llc|ltd|limited|ltda|ab|srl|sas|company|co|gmbh|sa|bv|oy|kg|kk|publishing|press|"
+    r"productions|production|entertainment)\.?\b"
+)
+LICENSE_SPLIT_PATTERN = re.compile(
+    r"(under license|produced under license|published under|distributed by|in association with).*$"
+)
+LEADING_ARTICLE_PATTERN = re.compile(r"^a\s+(.+)")
 
 
 def normalize_publisher(name: str) -> str:

@@ -6,13 +6,14 @@ from pydantic import Field
 from pydantic.dataclasses import dataclass
 
 from bookmeta.services.bookinfo import (
-    BookInfoRequestPipeline,
     DEFAULT_OLLAMA_MODEL,
     DEFAULT_OPENAI_MODEL,
+    BookInfoRequestPipeline,
     Provider,
 )
-from .providers.openai import openai_bookinfo_request
+
 from .providers.ollama import ollama_bookinfo_request
+from .providers.openai import openai_bookinfo_request
 
 
 @dataclass

@@ -10,14 +10,14 @@ import ollama
 
 from bookmeta.config.settings import DEFAULT_DB_PATH, PIPELINE_CACHE_DIR
 from bookmeta.data.sqlite import persist_run, serialize_pipeline_config
+from bookmeta.services.bookinfo.book_info import DetailedBookInfo
+from bookmeta.services.bookinfo.pipeline import BookInfoPipelineConfig
 from bookmeta.services.bookinfo.pipeline import (
-    BookInfoPipelineConfig,
     generate_pipeline as generate_bookinfo_pipeline,
 )
-from bookmeta.services.bookinfo.book_info import DetailedBookInfo
 from bookmeta.services.booksearch import BookSearchMethod
+from bookmeta.services.booksearch.pipeline import BookSearchPipelineConfig
 from bookmeta.services.booksearch.pipeline import (
-    BookSearchPipelineConfig,
     generate_pipeline as generate_booksearch_pipeline,
 )
 from bookmeta.services.booksearch.providers.googlebooks import (
@@ -33,10 +33,9 @@ from bookmeta.services.ocr.ocr import (
     ollama_ocr_method,
     tesseract_ocr_method,
 )
-from bookmeta.services.ocr.pipeline import (
-    OcrPipelineConfig,
-    generate_pipeline as generate_ocr_pipeline,
-)
+from bookmeta.services.ocr.pdf_ocr_results import PdfOcrResults
+from bookmeta.services.ocr.pipeline import OcrPipelineConfig
+from bookmeta.services.ocr.pipeline import generate_pipeline as generate_ocr_pipeline
 from bookmeta.services.rank.pipeline import (
     BookInfoSelectionPipelineConfig,
     generate_selection_pipeline,
@@ -49,6 +48,10 @@ class PipelineConfig:
     extraction_config: BookInfoPipelineConfig
     selection_config: BookInfoSelectionPipelineConfig
     booksearch_config: BookSearchPipelineConfig
+
+
+class NoOcrTextError(RuntimeError):
+    """Raised when no OCR method extracted any text from a PDF."""
 
 
 LOGGER = logging.getLogger(__name__)
@@ -152,6 +155,19 @@ def _client_config_for(provider: str, secrets: dict[str, Any]) -> dict[str, Any]
     raise ValueError(f"Unsupported provider: {provider}")
 
 
+def _has_ocr_text(ocr_results: PdfOcrResults) -> bool:
+    combined = (ocr_results.combined_text or "").strip()
+    if combined:
+        return True
+    pages = ocr_results.ocr_results
+    for page in pages:
+        for result in page.ocr_results:
+            text = result.text
+            if text and text.strip():
+                return True
+    return False
+
+
 def _default_booksearch_methods(
     args: argparse.Namespace, secrets: dict[str, Any]
 ) -> list[BookSearchMethod]:
@@ -219,6 +235,9 @@ def pipeline(config: PipelineConfig) -> BookMetaPipeline:
 
     def _inner_(pdf_path: Path) -> DetailedBookInfo:
         ocr_results = ocr_pipeline(pdf_path)
+        if not _has_ocr_text(ocr_results):
+            LOGGER.warning(f"Skipping {pdf_path} because OCR produced no text.")
+            raise NoOcrTextError(f"No OCR text extracted for {pdf_path}")
         search_results = search_pipeline(info_pipeline(ocr_results))
         return selection_pipeline(ocr_results, search_results)
 
@@ -232,25 +251,37 @@ def execute_pipeline(
     return pipeline(config)(pdf)
 
 
-def main():
+def process_pdf(
+    pdf: Path,
+    config: PipelineConfig,
+    results_db: Path,
+) -> DetailedBookInfo | None:
+    LOGGER.info(f"Running pipeline on {pdf}")
+    config_signature = json.dumps(serialize_pipeline_config(config), sort_keys=True)
+    try:
+        final_info = execute_pipeline(pdf, config, config_signature)
+    except NoOcrTextError as exc:
+        LOGGER.warning(f"Skipping {pdf}: {exc}")
+        return
+
+    LOGGER.info(f"Final BookInfo for {pdf}:\n{final_info}")
+    try:
+        persist_run(results_db, pdf, config, final_info)
+        LOGGER.info(f"Persisted pipeline run to {results_db} for {pdf}")
+    except Exception:
+        LOGGER.exception(f"Failed to persist pipeline run for {pdf}")
+    return final_info
+
+
+def main() -> DetailedBookInfo | None:
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
     secrets = _read_secrets(args.secrets)
     config = build_pipeline_config(args, secrets)
-
-    config_signature = json.dumps(serialize_pipeline_config(config), sort_keys=True)
-    logging.info("Running pipeline on %s", args.pdf_path)
-    final_info = execute_pipeline(args.pdf_path, config, config_signature)
-    logging.info("Final BookInfo:\n%s", final_info)
-
-    try:
-        persist_run(args.results_db, args.pdf_path, config, final_info)
-        logging.info("Persisted pipeline run to %s", args.results_db)
-    except Exception:
-        logging.exception("Failed to persist pipeline run.")
-    return final_info
+    return process_pdf(args.pdf_path, config, args.results_db)
 
 
 if __name__ == "__main__":
-    out: DetailedBookInfo = main()
-    print(json.dumps(out.model_dump(), indent=2))
+    out = main()
+    if out is not None:
+        print(json.dumps(out.model_dump(), indent=2))

@@ -1,5 +1,4 @@
 import argparse
-from dataclasses import dataclass
 import json
 import logging
 import os
@@ -7,6 +6,7 @@ import sqlite3
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from threading import Lock
 from typing import Any, Iterable
@@ -76,18 +76,18 @@ def _normalize_keywords_pipeline_cached(
 ) -> pd.DataFrame:
     """Load keywords from the DB, cluster them, and assign canonical labels."""
 
-    LOGGER.info("Loading keyword metadata from %s", db_path)
+    LOGGER.info(f"Loading keyword metadata from {db_path}")
     df = get_keywords_by_pdf_hash(db_path)
-    LOGGER.info("Loaded %d rows", len(df))
+    LOGGER.info(f"Loaded {len(df)} rows")
     if df.empty:
         df["canonical_keywords"] = [[] for _ in range(len(df))]
         return df
 
     all_keywords = _flatten_keywords(df["keywords"])
-    LOGGER.info("Discovered %d raw keywords", len(all_keywords))
+    LOGGER.info(f"Discovered {len(all_keywords)} raw keywords")
     keyword_to_clean = {keyword: normalize_keyword(keyword) for keyword in all_keywords}
     cleaned_keywords = [kw for kw in dict.fromkeys(keyword_to_clean.values()) if kw]
-    LOGGER.info("Normalized to %d unique keywords", len(cleaned_keywords))
+    LOGGER.info(f"Normalized to {len(cleaned_keywords)} unique keywords")
 
     if not cleaned_keywords:
         LOGGER.warning("No keywords remained after normalization.")
@@ -102,13 +102,13 @@ def _normalize_keywords_pipeline_cached(
         host=embedding_host,
         model=embedding_model,
     )
-    LOGGER.info("Generated %d embeddings", len(embeddings))
+    LOGGER.info(f"Generated {len(embeddings)} embeddings")
 
     clusters = agglomerative_cluster_keywords(
         embeddings,
         n_clusters=cluster_count,
     )
-    LOGGER.info("Computed %d keyword clusters", clusters["cluster_id"].nunique())
+    LOGGER.info(f"Computed {clusters['cluster_id'].nunique()} keyword clusters")
 
     canonical_clusters = assign_canonical_keywords_per_cluster(
         clusters,
@@ -123,7 +123,7 @@ def _normalize_keywords_pipeline_cached(
     clean_to_canonical = dict(
         canonical_clusters[["keyword", "canonical_keyword"]].values.tolist()
     )
-    LOGGER.info("Mapped %d keywords to canonical labels", len(clean_to_canonical))
+    LOGGER.info(f"Mapped {len(clean_to_canonical)} keywords to canonical labels")
 
     def _map_keywords(keywords: Iterable[str]) -> list[str]:
         canonical: list[str] = []
@@ -166,7 +166,7 @@ def normalize_keywords_pipeline(
 
     if write_to_disk:
         path = Path(db_path)
-        LOGGER.info("Writing normalized metadata to %s", path)
+        LOGGER.info(f"Writing normalized metadata to {path}")
         with sqlite3.connect(path) as conn:
             df.to_sql("normalize_metadata", conn, if_exists="replace", index=False)
 
@@ -363,30 +363,30 @@ def _process_pdf(
         target_resolved = target_pdf.resolve()
     target_dir.mkdir(parents=True, exist_ok=True)
     if target_pdf.exists() and target_resolved != source_resolved:
-        LOGGER.info("Skipping %s; output already exists at %s", pdf_path, target_pdf)
+        LOGGER.info(f"Skipping {pdf_path}; output already exists at {target_pdf}")
         return
 
     pdf_hash = _compute_pdf_hash(pdf_path)
     entity = metadata_by_hash.get(pdf_hash)
 
-    LOGGER.info("Processing %s (hash=%s)", pdf_path, pdf_hash)
-    LOGGER.info("Hash lookup result: %s", entity)
+    LOGGER.info(f"Processing {pdf_path} (hash={pdf_hash})")
+    LOGGER.info(f"Hash lookup result: {entity}")
     if not entity:
         entity = metadata_by_name.get(pdf_path.name)
-        LOGGER.info("Name lookup result: %s", entity)
+        LOGGER.info(f"Name lookup result: {entity}")
     if not entity:
-        LOGGER.warning("No metadata available for %s (hash=%s)", pdf_path, pdf_hash)
+        LOGGER.warning(f"No metadata available for {pdf_path} (hash={pdf_hash})")
         return
 
     metadata_payload = _writer_payload(entity)
     if not metadata_payload:
-        LOGGER.warning("No metadata fields to embed for %s", pdf_path)
+        LOGGER.warning(f"No metadata fields to embed for {pdf_path}")
         return
     try:
         _write_metadata_with_cli(pdf_path, target_pdf, metadata_payload, writer_bin)
-        LOGGER.info("Embedded metadata for %s into %s", pdf_path, target_pdf)
+        LOGGER.info(f"Embedded metadata for {pdf_path} into {target_pdf}")
     except Exception as exc:
-        LOGGER.error("Failed processing %s: %s", pdf_path, exc)
+        LOGGER.error(f"Failed processing {pdf_path}: {exc}")
         with FAILURE_LOG_LOCK:
             failure_log.parent.mkdir(parents=True, exist_ok=True)
             with failure_log.open("a", encoding="utf-8") as fh:
@@ -403,20 +403,19 @@ def run_metadata_writer(
     workers: int = 4,
     n_clusters=750,
 ) -> None:
-    LOGGER.info("Normalizing metadata from %s", db_path)
+    LOGGER.info(f"Normalizing metadata from {db_path}")
     df = normalize_keywords_pipeline(
         db_path=db_path, write_to_disk=False, cluster_count=n_clusters
     )
     df = attach_book_metadata_payloads(df)
     metadata_by_hash, metadata_by_name = dataframe_to_metadata_maps(df)
     LOGGER.info(
-        "Built metadata maps with %d hash entries and %d name entries",
-        len(metadata_by_hash),
-        len(metadata_by_name),
+        f"Built metadata maps with {len(metadata_by_hash)} hash entries and "
+        f"{len(metadata_by_name)} name entries"
     )
 
     pdfs = _collect_pdfs(pdf_path)
-    LOGGER.info("Found %d PDF(s) to process", len(pdfs))
+    LOGGER.info(f"Found {len(pdfs)} PDF(s) to process")
     output_dir.mkdir(parents=True, exist_ok=True)
     failure_log = output_dir / "metadata_failures.log"
     failure_log.write_text("", encoding="utf-8")

@@ -1,23 +1,13 @@
 import argparse
-import json
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
-from bookmeta.cli.pipeline import (
-    PipelineConfig,
-    _read_secrets,
-    build_pipeline_config,
-    execute_pipeline,
-)
+from bookmeta.cli.pipeline import _read_secrets, build_pipeline_config, process_pdf
 from bookmeta.config.settings import DEFAULT_DB_PATH
-from bookmeta.data.sqlite import (
-    _compute_pdf_hash,
-    persist_run,
-    serialize_pipeline_config,
-)
+from bookmeta.data.sqlite import _compute_pdf_hash
 
 
 def parse_args() -> argparse.Namespace:
@@ -109,18 +99,23 @@ def _discover_pdfs(root: Path) -> list[Path]:
     return sorted(path for path in root.rglob("*.pdf") if path.is_file())
 
 
-def _process_pdf(
-    pdf: Path, config: PipelineConfig, config_signature: str, results_db: Path
-) -> Any:
-    logging.info("Running pipeline on %s", pdf)
-    final_info = execute_pipeline(pdf, config, config_signature)
-    logging.info("Final BookInfo for %s:\n%s", pdf, final_info)
-    try:
-        persist_run(results_db, pdf, config, final_info)
-        logging.info("Persisted pipeline run to %s for %s", results_db, pdf)
-    except Exception:
-        logging.exception("Failed to persist pipeline run for %s", pdf)
-    return final_info
+def _dedupe_pdfs(paths: list[Path]) -> list[Path]:
+    seen: dict[str, Path] = {}
+    duplicates = 0
+    unique: list[Path] = []
+    for pdf in paths:
+        pdf_hash = _compute_pdf_hash(pdf)
+        if pdf_hash in seen:
+            duplicates += 1
+            logging.info(
+                f"Skipping duplicate PDF {pdf} (same hash as {seen[pdf_hash]})"
+            )
+        else:
+            seen[pdf_hash] = pdf
+            unique.append(pdf)
+    if duplicates:
+        logging.info(f"Deduplicated {duplicates} PDFs with identical hashes.")
+    return unique
 
 
 def main() -> dict[str, Any]:
@@ -128,19 +123,21 @@ def main() -> dict[str, Any]:
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
     secrets = _read_secrets(args.secrets)
     config = build_pipeline_config(args, secrets)
-    config_signature = json.dumps(serialize_pipeline_config(config), sort_keys=True)
 
     pdfs = _discover_pdfs(args.pdf_directory)
     if not pdfs:
-        logging.warning("No PDFs found inside %s", args.pdf_directory)
+        logging.warning(f"No PDFs found inside {args.pdf_directory}")
+        return {"processed": {}, "failed": {}}
+    pdfs = _dedupe_pdfs(pdfs)
+    if not pdfs:
+        logging.warning(
+            f"All discovered PDFs under {args.pdf_directory} were duplicates; nothing to process."
+        )
         return {"processed": {}, "failed": {}}
 
     workers = max(1, args.workers)
     logging.info(
-        "Discovered %d PDFs under %s. Processing with %d workers.",
-        len(pdfs),
-        args.pdf_directory,
-        workers,
+        f"Discovered {len(pdfs)} PDFs under {args.pdf_directory}. Processing with {workers} workers."
     )
 
     processed: dict[str, Any] = {}
@@ -148,9 +145,7 @@ def main() -> dict[str, Any]:
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(
-                _process_pdf, pdf, config, config_signature, args.results_db
-            ): pdf
+            executor.submit(process_pdf, pdf, config, args.results_db): pdf
             for pdf in pdfs
         }
         for future in as_completed(futures):
@@ -158,9 +153,12 @@ def main() -> dict[str, Any]:
             pdf_hash = _compute_pdf_hash(pdf)
             try:
                 result = future.result()
+                if result is None:
+                    logging.info(f"No metadata produced for {pdf}; nothing persisted.")
+                    continue
                 processed[pdf_hash] = {"input": str(pdf), "output": result.model_dump()}
             except Exception as exc:
-                logging.exception("Pipeline failed for %s", pdf)
+                logging.exception(f"Pipeline failed for {pdf}")
                 failed[pdf_hash] = str(exc)
 
     summary = {"processed": processed, "failed": failed}

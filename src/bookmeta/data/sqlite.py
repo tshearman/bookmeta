@@ -62,15 +62,9 @@ def serialize_pipeline_config(config: Any) -> dict[str, Any]:
     }
 
 
-def _compute_pdf_hash(pdf_path: Path, chunk_size: int = 64 * 1024) -> str:
-    digest = hashlib.sha256()
+def _compute_pdf_hash(pdf_path: Path, /) -> str:
     with pdf_path.open("rb") as fh:
-        while True:
-            chunk = fh.read(chunk_size)
-            if not chunk:
-                break
-            digest.update(chunk)
-    return digest.hexdigest()
+        return hashlib.file_digest(fh, "sha256").hexdigest()
 
 
 def _ensure_db(db_path: Path) -> None:
