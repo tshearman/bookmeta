@@ -15,6 +15,9 @@ import joblib
 import pandas as pd
 from tqdm.auto import tqdm
 
+from bookmeta.cli.batch import _count_pdfs_with_ripgrep
+from bookmeta.cli.pipeline import _read_secrets
+from bookmeta.cli.utils import discover_pdfs
 from bookmeta.config.settings import DEFAULT_DB_PATH, NORMALIZE_CACHE_DIR
 from bookmeta.data.sqlite import _compute_pdf_hash
 from bookmeta.pipelines.normalization.keywords import (
@@ -24,7 +27,10 @@ from bookmeta.pipelines.normalization.keywords import (
     get_keywords_by_pdf_hash,
     normalize_keyword,
 )
-from bookmeta.pipelines.normalization.publisher import normalize_publisher
+from bookmeta.pipelines.normalization.publisher import (
+    attach_canonical_publishers,
+    normalize_publisher,
+)
 
 LOGGER = logging.getLogger(__name__)
 FAILURE_LOG_LOCK = Lock()
@@ -54,48 +60,38 @@ def _writer_binary(cli_path: Path | None = None) -> Path:
 
 
 def _flatten_keywords(keyword_sets: Iterable[Iterable[str]]) -> list[str]:
-    unique: dict[str, None] = {}
+    uniques = set([])
     for group in keyword_sets:
         for keyword in group:
-            if keyword not in unique:
-                unique[keyword] = None
-    return list(unique.keys())
+            if keyword not in uniques:
+                uniques.add(keyword)
+    return sorted(uniques)
 
 
-@NORMALIZE_CACHE.cache
-def _normalize_keywords_pipeline_cached(
-    db_path: Path | str = DEFAULT_DB_PATH,
-    *,
-    workers: int = 4,
-    embedding_host: str = "http://192.168.1.31:11434",
-    embedding_model: str = "snowflake-arctic-embed:335m",
-    cluster_count: int | None = None,
-    canonical_host: str = "http://192.168.1.31:11434",
-    canonical_model: str = "qwen2.5vl:32b",
-    canonical_temperature: float = 0.01,
-) -> pd.DataFrame:
-    """Load keywords from the DB, cluster them, and assign canonical labels."""
-
-    LOGGER.info(f"Loading keyword metadata from {db_path}")
-    df = get_keywords_by_pdf_hash(db_path)
-    LOGGER.info(f"Loaded {len(df)} rows")
-    if df.empty:
-        df["canonical_keywords"] = [[] for _ in range(len(df))]
-        return df
-
+def _collect_cleaned_keywords(df: pd.DataFrame) -> tuple[dict[str, str], list[str]]:
     all_keywords = _flatten_keywords(df["keywords"])
     LOGGER.info(f"Discovered {len(all_keywords)} raw keywords")
     keyword_to_clean = {keyword: normalize_keyword(keyword) for keyword in all_keywords}
-    cleaned_keywords = [kw for kw in dict.fromkeys(keyword_to_clean.values()) if kw]
+    cleaned_keywords = sorted(
+        list([kw for kw in dict.fromkeys(keyword_to_clean.values()) if kw])
+    )
     LOGGER.info(f"Normalized to {len(cleaned_keywords)} unique keywords")
+    for kw in cleaned_keywords[:100]:
+        LOGGER.info(f"\t{kw}")
+    return keyword_to_clean, cleaned_keywords
 
-    if not cleaned_keywords:
-        LOGGER.warning("No keywords remained after normalization.")
-        df["canonical_keywords"] = [
-            sorted({kw for kw in keywords if kw}) for keywords in df["keywords"]
-        ]
-        return df
 
+def _build_canonical_keyword_map(
+    cleaned_keywords: list[str],
+    *,
+    workers: int,
+    embedding_host: str,
+    embedding_model: str,
+    cluster_count: int | None,
+    canonical_host: str,
+    canonical_model: str,
+    canonical_temperature: float,
+) -> dict[str, str]:
     embeddings = generate_keyword_embeddings(
         cleaned_keywords,
         workers=workers,
@@ -109,6 +105,7 @@ def _normalize_keywords_pipeline_cached(
         n_clusters=cluster_count,
     )
     LOGGER.info(f"Computed {clusters['cluster_id'].nunique()} keyword clusters")
+    LOGGER.info(clusters.head())
 
     canonical_clusters = assign_canonical_keywords_per_cluster(
         clusters,
@@ -117,13 +114,33 @@ def _normalize_keywords_pipeline_cached(
         temperature=canonical_temperature,
         workers=workers,
     )
+
+    LOGGER.info(f"Generated canonical clusters:")
+    LOGGER.info(canonical_clusters.head())
+
     canonical_clusters["canonical_keyword"] = canonical_clusters[
         "canonical_keyword"
     ].fillna(canonical_clusters["keyword"])
+
+    LOGGER.info(canonical_clusters.head())
+
     clean_to_canonical = dict(
         canonical_clusters[["keyword", "canonical_keyword"]].values.tolist()
     )
+
     LOGGER.info(f"Mapped {len(clean_to_canonical)} keywords to canonical labels")
+
+    return clean_to_canonical
+
+
+def _apply_canonical_keyword_map(
+    df: pd.DataFrame,
+    keyword_to_clean: dict[str, str],
+    clean_to_canonical: dict[str, str],
+) -> pd.DataFrame:
+    LOGGER.info("Applying Canonical Keyword Map to:")
+    LOGGER.info(df.columns)
+    LOGGER.info(df.head())
 
     def _map_keywords(keywords: Iterable[str]) -> list[str]:
         canonical: list[str] = []
@@ -136,21 +153,67 @@ def _normalize_keywords_pipeline_cached(
     df = df.copy()
     df["canonical_keywords"] = df["keywords"].apply(_map_keywords)
     df["canonical_keywords"] = df["canonical_keywords"].apply(json.dumps)
-    LOGGER.info("Assigned canonical keywords for all rows")
 
+    LOGGER.info("Assigned canonical keywords for all rows")
+    LOGGER.info(df.columns)
+    LOGGER.info(df.head())
     return df
+
+
+@NORMALIZE_CACHE.cache
+def _normalize_keywords_pipeline_cached(
+    db_path: Path | str = DEFAULT_DB_PATH,
+    *,
+    workers: int = 8,
+    embedding_host: str,
+    embedding_model: str,
+    cluster_count: int | None = None,
+    canonical_host: str,
+    canonical_model: str,
+    canonical_temperature: float = 0.01,
+) -> pd.DataFrame:
+    """Load keywords from the DB, cluster them, and assign canonical labels."""
+
+    LOGGER.info(f"Loading keyword metadata from {db_path}")
+    df = get_keywords_by_pdf_hash(db_path)
+    LOGGER.info(f"Loaded {len(df)} rows")
+    if df.empty:
+        df["canonical_keywords"] = [[] for _ in range(len(df))]
+        return df
+
+    keyword_to_clean_map, cleaned_keywords = _collect_cleaned_keywords(df)
+
+    if not cleaned_keywords:
+        LOGGER.warning("No keywords remained after normalization.")
+        df["canonical_keywords"] = [
+            sorted({kw for kw in keywords if kw}) for keywords in df["keywords"]
+        ]
+        return df
+
+    clean_to_canonical = _build_canonical_keyword_map(
+        cleaned_keywords,
+        workers=workers,
+        embedding_host=embedding_host,
+        embedding_model=embedding_model,
+        cluster_count=cluster_count,
+        canonical_host=canonical_host,
+        canonical_model=canonical_model,
+        canonical_temperature=canonical_temperature,
+    )
+
+    return _apply_canonical_keyword_map(df, keyword_to_clean_map, clean_to_canonical)
 
 
 def normalize_keywords_pipeline(
     db_path: Path | str = DEFAULT_DB_PATH,
     *,
     workers: int = 4,
-    embedding_host: str = "http://192.168.1.31:11434",
-    embedding_model: str = "snowflake-arctic-embed:335m",
+    embedding_host: str,
+    embedding_model: str,
     cluster_count: int | None = None,
-    canonical_host: str = "http://192.168.1.31:11434",
-    canonical_model: str = "qwen2.5vl:32b",
-    canonical_temperature: float = 0.01,
+    canonical_host: str,
+    canonical_model: str,
+    canonical_temperature: float = 0.0,
     write_to_disk: bool = False,
 ) -> pd.DataFrame:
     df = _normalize_keywords_pipeline_cached(
@@ -163,12 +226,23 @@ def normalize_keywords_pipeline(
         canonical_model=canonical_model,
         canonical_temperature=canonical_temperature,
     )
+    LOGGER.info("Applied Keyword Normalization")
+    LOGGER.info(df.columns)
+    LOGGER.info(df.head())
+
+    def to_str(xs: Iterable):
+        return json.dumps(list(xs))
 
     if write_to_disk:
         path = Path(db_path)
         LOGGER.info(f"Writing normalized metadata to {path}")
+        df_to_write = df.copy()
+        df_to_write["keywords"] = df["keywords"].map(to_str)
+        df_to_write["canonical_keywords"] = df["canonical_keywords"].map(to_str)
         with sqlite3.connect(path) as conn:
-            df.to_sql("normalize_metadata", conn, if_exists="replace", index=False)
+            df_to_write.to_sql(
+                "normalize_metadata", conn, if_exists="replace", index=False
+            )
 
     return df
 
@@ -203,9 +277,8 @@ class BookMetadataEntity:
 
 
 def row_to_book_metadata(row: pd.Series) -> BookMetadataEntity:
-    keywords = _load_list(row.get("keywords"))
-    canonical = _load_list(row.get("canonical_keywords"))
-    tags = sorted({kw.lower() for kw in keywords + canonical if kw})
+    keywords = _load_list(row.get("canonical_keywords") or row.get("keywords"))
+    tags = sorted({kw.lower() for kw in keywords if kw})
 
     author_value = row.get("author")
     authors = _load_list(author_value)
@@ -232,7 +305,7 @@ def row_to_book_metadata(row: pd.Series) -> BookMetadataEntity:
         title=row.get("title"),
         subtitle=row.get("subtitle"),
         publisher=publisher.title() if publisher else None,
-        categories=[],
+        categories=tags,
         tags=tags,
         description=row.get("description"),
         isbn13=isbn_13,
@@ -278,14 +351,6 @@ def dataframe_to_metadata_maps(
             if name:
                 by_name[name] = entity
     return by_hash, by_name
-
-
-def _collect_pdfs(pdf_path: Path) -> list[Path]:
-    if not pdf_path.exists():
-        raise FileNotFoundError(f"PDF path not found: {pdf_path}")
-    if pdf_path.is_file():
-        return [pdf_path]
-    return sorted(pdf_path.rglob("*.pdf"))
 
 
 def _writer_payload(entity: BookMetadataEntity) -> dict[str, Any]:
@@ -384,7 +449,7 @@ def _process_pdf(
         return
     try:
         _write_metadata_with_cli(pdf_path, target_pdf, metadata_payload, writer_bin)
-        LOGGER.info(f"Embedded metadata for {pdf_path} into {target_pdf}")
+        LOGGER.debug(f"Embedded metadata for {pdf_path} into {target_pdf}")
     except Exception as exc:
         LOGGER.error(f"Failed processing {pdf_path}: {exc}")
         with FAILURE_LOG_LOCK:
@@ -400,29 +465,43 @@ def run_metadata_writer(
     output_dir: Path,
     *,
     writer_bin: Path | None = None,
-    workers: int = 4,
-    n_clusters=750,
+    workers: int = 16,
+    n_clusters=1000,
+    embedding_model: str,
+    canonical_model: str,
+    embedding_host: str,
+    canonical_host: str,
 ) -> None:
     LOGGER.info(f"Normalizing metadata from {db_path}")
     df = normalize_keywords_pipeline(
-        db_path=db_path, write_to_disk=False, cluster_count=n_clusters
+        db_path=db_path,
+        write_to_disk=True,
+        cluster_count=n_clusters,
+        workers=workers,
+        embedding_model=embedding_model,
+        canonical_model=canonical_model,
+        embedding_host=embedding_host,
+        canonical_host=canonical_host,
     )
     df = attach_book_metadata_payloads(df)
+    df = attach_canonical_publishers(df)
     metadata_by_hash, metadata_by_name = dataframe_to_metadata_maps(df)
     LOGGER.info(
         f"Built metadata maps with {len(metadata_by_hash)} hash entries and "
         f"{len(metadata_by_name)} name entries"
     )
 
-    pdfs = _collect_pdfs(pdf_path)
-    LOGGER.info(f"Found {len(pdfs)} PDF(s) to process")
+    is_file = pdf_path.is_file()
+    total_pdfs = 1 if is_file else _count_pdfs_with_ripgrep(pdf_path)
+    LOGGER.info(f"Found {total_pdfs} PDF(s) to process")
+
     output_dir.mkdir(parents=True, exist_ok=True)
     failure_log = output_dir / "metadata_failures.log"
     failure_log.write_text("", encoding="utf-8")
     pdf_root = pdf_path if pdf_path.is_dir() else pdf_path.parent
-
     resolved_writer = _writer_binary(writer_bin)
 
+    pdfs = [pdf_path] if is_file else discover_pdfs(pdf_path)
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = [
             executor.submit(
@@ -437,13 +516,12 @@ def run_metadata_writer(
             )
             for pdf in pdfs
         ]
-        for future in tqdm(
-            as_completed(futures),
-            total=len(futures),
-            desc="Processing PDFs",
-            unit="pdf",
-        ):
-            future.result()
+        with tqdm(total=total_pdfs, desc="Processing PDFs", unit="pdf") as progress:
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                finally:
+                    progress.update(1)
 
 
 __all__ = [
@@ -482,6 +560,22 @@ def main() -> None:
         help="Logging level (DEBUG, INFO, WARNING, ERROR).",
     )
     parser.add_argument(
+        "--secrets",
+        type=Path,
+        default=Path("secrets.json"),
+        help="Path to secrets JSON containing OLLAMA_HOST.",
+    )
+    parser.add_argument(
+        "--embedding-model",
+        default="snowflake-arctic-embed:335m",
+        help="Model ID for keyword embedding generation.",
+    )
+    parser.add_argument(
+        "--canonical-model",
+        default="qwen2.5vl:32b",
+        help="Model ID used to choose canonical keywords.",
+    )
+    parser.add_argument(
         "--writer-bin",
         type=Path,
         default=None,
@@ -491,7 +585,10 @@ def main() -> None:
 
     log_level = getattr(logging, args.log_level.upper(), logging.INFO)
     logging.basicConfig(level=log_level)
-    logging.getLogger("httpx").setLevel(logging.INFO)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+
+    secrets = _read_secrets(args.secrets)
+    ollama_host = secrets.get("OLLAMA_HOST", "http://192.168.1.31:11434")
 
     run_metadata_writer(
         db_path=args.db_path,
@@ -499,6 +596,10 @@ def main() -> None:
         output_dir=args.output_dir.resolve(),
         writer_bin=args.writer_bin,
         workers=args.workers,
+        embedding_model=args.embedding_model,
+        canonical_model=args.canonical_model,
+        embedding_host=ollama_host,
+        canonical_host=ollama_host,
     )
 
 

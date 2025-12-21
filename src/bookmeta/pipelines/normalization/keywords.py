@@ -71,8 +71,9 @@ def get_keywords_by_pdf_hash(db_path: Path | str = DEFAULT_DB_PATH) -> pd.DataFr
         .apply(pd.Series)[["title", "author", "publisher", "keywords", "description"]]
     )
     out = pd.concat([df, parsed], axis=1)
-    out = out[out["keywords"].notna()]
-    out["keywords"] = out["keywords"].apply(set)
+    out["keywords"] = out["keywords"].apply(
+        lambda kws: sorted(set(kws)) if kws else set([])
+    )
     return out.reset_index(drop=True)
 
 
@@ -83,6 +84,7 @@ def get_keyword_embedding(host: str, model: str, keyword: str) -> list[float]:
     return response.get("embeddings")
 
 
+@EMBEDDING_CACHE.cache
 def agglomerative_cluster_keywords(
     keyword_embeddings: pd.DataFrame,
     *,
@@ -92,6 +94,8 @@ def agglomerative_cluster_keywords(
     metric: str = "cosine",
 ) -> pd.DataFrame:
 
+    LOGGER.info(f"Building Clusters from Embeddings:")
+    LOGGER.info(keyword_embeddings.head())
     keywords = keyword_embeddings["keyword"].tolist()
     matrix = np.vstack(
         [
@@ -99,7 +103,10 @@ def agglomerative_cluster_keywords(
             for vec in keyword_embeddings["embedding"]
         ]
     )
+    LOGGER.info(f"Stacked Embeddings, shape: {matrix.shape}")
+    LOGGER.info(matrix[:10])
 
+    LOGGER.info("Generating Clusters Model")
     model = AgglomerativeClustering(
         n_clusters=n_clusters,
         distance_threshold=distance_threshold,
@@ -132,7 +139,7 @@ def generate_keyword_embeddings(
             as_completed(futures),
             total=len(futures),
             desc="Embedding keywords",
-            unit="keyword",
+            unit="keywords",
         ):
             keyword = futures[future]
             try:
@@ -154,7 +161,7 @@ def canonicalize_keyword_group(
     ollama_host: str = "http://192.168.1.31:11434",
     ollama_model: str = "qwen2.5vl:32b",
     temperature: float = 0.0,
-) -> str:
+) -> str | None:
     if not keywords:
         raise ValueError("keywords must be a non-empty collection of strings.")
     cleaned = [keyword.strip() for keyword in keywords if keyword and keyword.strip()]
@@ -187,7 +194,10 @@ def canonicalize_keyword_group(
         options={"temperature": temperature},
     )
     result = response["message"]["content"].strip()
-    return result.splitlines()[0].strip().strip('"')
+    try:
+        return result.splitlines()[0].strip().strip('"')
+    except:
+        return None
 
 
 def assign_canonical_keywords_per_cluster(
@@ -229,7 +239,7 @@ def assign_canonical_keywords_per_cluster(
             for future in as_completed(futures):
                 cluster_id = futures[future]
                 try:
-                    mapping[cluster_id] = future.result()
+                    mapping[cluster_id] = normalize_keyword(future.result())
                 except Exception as exc:
                     raise RuntimeError(
                         f"Failed to canonicalize cluster {cluster_id}: {exc}"
@@ -244,7 +254,9 @@ def assign_canonical_keywords_per_cluster(
     return result
 
 
-def normalize_keyword(keyword: str) -> str:
+def normalize_keyword(keyword: str | None) -> str | None:
+    if keyword is None:
+        return None
     if not keyword:
         return ""
     text = clean(

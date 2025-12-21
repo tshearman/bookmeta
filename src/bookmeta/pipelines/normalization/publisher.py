@@ -72,11 +72,15 @@ def assign_canonical_publishers(
             mapping[name] = canonical
     result = df.copy()
     result["canonical_publisher"] = result["publisher"].map(mapping)
-    result["canonical_publisher"].fillna(result["publisher"], inplace=True)
+    result["canonical_publisher"] = result["canonical_publisher"].fillna(
+        result["publisher"]
+    )
     return result
 
 
 def attach_canonical_publishers(df: pd.DataFrame) -> pd.DataFrame:
-    publishers = list(df["publisher"].unique())
+    publishers = [
+        pub for pub in df["publisher"].unique() if isinstance(pub, str) and pub.strip()
+    ]
     pub_groups = fuzzy_group_publishers(publishers)
     return assign_canonical_publishers(df, pub_groups)
