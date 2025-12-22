@@ -3,7 +3,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 import joblib
 import ollama
@@ -68,7 +68,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Process a PDF and produce refined book metadata."
     )
-    parser.add_argument("pdf_path", type=Path, help="Path to the input PDF.")
+    parser.add_argument(
+        "pdf_path",
+        nargs="+",
+        type=Path,
+        help="Path(s) to the input PDF(s). Supports globs like 'files/books_*'.",
+    )
     parser.add_argument(
         "--secrets",
         type=Path,
@@ -181,13 +186,13 @@ def _default_booksearch_methods(
             )
         )
 
-    if "HARDCOVER_API_KEY" in secrets:
-        api_key = secrets["HARDCOVER_API_KEY"]
-        methods.append(
-            hardcover_search(
-                HardcoverClientConfig(api_key=api_key, per_page=args.search_max_results)
-            )
-        )
+    # if "HARDCOVER_API_KEY" in secrets:
+    #     api_key = secrets["HARDCOVER_API_KEY"]
+    #     methods.append(
+    #         hardcover_search(
+    #             HardcoverClientConfig(api_key=api_key, per_page=args.search_max_results)
+    #         )
+    #     )
 
     return methods
 
@@ -273,12 +278,34 @@ def process_pdf(
     return final_info
 
 
+def _expand_paths(patterns: Iterable[Path]) -> list[Path]:
+    expanded: list[Path] = []
+    for pattern in patterns:
+        pattern = pattern.expanduser()
+        text = str(pattern)
+        if any(ch in text for ch in "*?[]"):
+            matches = list(Path().glob(text))
+            if not matches:
+                LOGGER.warning(f"No files matched pattern: {pattern}")
+            expanded.extend(matches)
+        else:
+            expanded.append(pattern)
+    return expanded
+
+
 def main() -> DetailedBookInfo | None:
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
     secrets = _read_secrets(args.secrets)
     config = build_pipeline_config(args, secrets)
-    return process_pdf(args.pdf_path, config, args.results_db)
+    pdf_paths = _expand_paths(args.pdf_path)
+    if not pdf_paths:
+        raise FileNotFoundError("No PDF paths matched the provided arguments.")
+
+    last_result: DetailedBookInfo | None = None
+    for pdf_path in pdf_paths:
+        last_result = process_pdf(pdf_path, config, args.results_db)
+    return last_result
 
 
 if __name__ == "__main__":

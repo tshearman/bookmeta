@@ -1,20 +1,29 @@
+#!/usr/bin/env python
+"""
+Deduplicate PDFs by comparing first page text, last page text, and page count.
+
+Usage:
+    python dedupe_pdf_by_content.py /path/to/pdfs --dest /tmp/duplicates
+    python dedupe_pdf_by_content.py /path/to/pdfs --rm
+"""
+
 import argparse
+import hashlib
 import logging
 import os
 import shutil
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional, Tuple
 
-from bookmeta.cli.utils import discover_pdfs
-from bookmeta.data.sqlite import _compute_pdf_hash
+from PyPDF2 import PdfReader
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Detect duplicate PDFs in a directory by hash and either remove "
-            "them or move them into a quarantine directory."
+            "Detect duplicate PDFs by page count plus first/last page text and "
+            "either remove them or move them into a destination directory."
         )
     )
     parser.add_argument(
@@ -37,7 +46,7 @@ def parse_args() -> argparse.Namespace:
         "--workers",
         type=int,
         default=max(1, (os.cpu_count() or 4)),
-        help="Number of hashing workers to use in parallel.",
+        help="Number of workers to use in parallel.",
     )
     parser.add_argument(
         "--log-level",
@@ -50,32 +59,83 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def _hash_pdf(path: Path) -> tuple[Path, str]:
-    return path, _compute_pdf_hash(path)
+def _normalize_text(text: Optional[str]) -> str:
+    if not text:
+        return ""
+    return " ".join(text.split()).strip().lower()
+
+
+def _page_image_digest(page) -> str:
+    hasher = hashlib.sha256()
+    try:
+        images = getattr(page, "images", []) or []
+        for image in images:
+            data = getattr(image, "data", b"") or b""
+            width = getattr(image, "width", None)
+            height = getattr(image, "height", None)
+            if width is not None and height is not None:
+                hasher.update(f"{width}x{height}".encode())
+            hasher.update(data)
+    except Exception as exc:
+        logging.debug("Failed to hash images for page: %s", exc)
+    return hasher.hexdigest()
+
+
+def _pdf_signature(path: Path) -> Tuple[int, str, str, str, str]:
+    reader = PdfReader(str(path))
+    page_count = len(reader.pages)
+    first_page = reader.pages[0]
+    last_page = reader.pages[-1]
+    first_text = _normalize_text(first_page.extract_text() or "")
+    last_text = _normalize_text(last_page.extract_text() or "")
+    first_images = _page_image_digest(first_page)
+    last_images = _page_image_digest(last_page)
+    return page_count, first_text, first_images, last_text, last_images
+
+
+def _hash_pdf_by_content(
+    path: Path,
+) -> Tuple[Path, Optional[Tuple[int, str, str, str, str]]]:
+    try:
+        return path, _pdf_signature(path)
+    except Exception as exc:
+        logging.warning("Failed to read %s: %s", path, exc)
+        return path, None
+
+
+def _discover_pdfs(root: Path) -> Iterable[Path]:
+    if not root.exists():
+        raise FileNotFoundError(f"PDF directory does not exist: {root}")
+    if not root.is_dir():
+        raise NotADirectoryError(f"PDF directory is not a directory: {root}")
+    yield from (path for path in root.rglob("*.pdf") if path.is_file())
 
 
 def _dedupe_pdfs(
     paths: Iterable[Path],
     *,
-    log_interval: int = 50,
+    log_interval: int = 25,
     workers: int,
-) -> tuple[list[Path], list[Path]]:
-    seen: dict[str, Path] = {}
+) -> Tuple[list[Path], list[Path]]:
+    seen: dict[Tuple[int, str, str, str, str], Path] = {}
     unique: list[Path] = []
     duplicates: list[Path] = []
-    hashed = 0
+    processed = 0
     with ThreadPoolExecutor(max_workers=workers) as executor:
-        for pdf, pdf_hash in executor.map(_hash_pdf, paths):
-            hashed += 1
-            if pdf_hash in seen:
-                logging.info("Duplicate detected: %s (matches %s)", pdf, seen[pdf_hash])
+        for pdf, signature in executor.map(_hash_pdf_by_content, paths):
+            processed += 1
+            if signature is None:
+                unique.append(pdf)
+                continue
+            if signature in seen:
+                logging.info("Duplicate detected: %s (matches %s)", pdf, seen[signature])
                 duplicates.append(pdf)
             else:
-                seen[pdf_hash] = pdf
+                seen[signature] = pdf
                 unique.append(pdf)
-            if hashed % log_interval == 0:
-                logging.info("Hashed %d PDFs...", hashed)
-    logging.info("Finished hashing %d PDFs.", hashed)
+            if processed % log_interval == 0:
+                logging.info("Processed %d PDFs...", processed)
+    logging.info("Finished processing %d PDFs.", processed)
     return unique, duplicates
 
 
@@ -121,8 +181,8 @@ def main() -> int:
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
 
-    pdf_iter = discover_pdfs(args.pdf_directory)
-    logging.info("Hashing PDFs with %d workers.", args.workers)
+    pdf_iter = _discover_pdfs(args.pdf_directory)
+    logging.info("Processing PDFs with %d workers.", args.workers)
     unique, duplicates = _dedupe_pdfs(pdf_iter, workers=args.workers)
     logging.info(
         "Found %d unique PDFs and %d duplicates.", len(unique), len(duplicates)
@@ -133,7 +193,7 @@ def main() -> int:
 
     if args.rm:
         _remove_duplicates(duplicates)
-    elif args.dest:
+    else:
         _move_duplicates(duplicates, args.dest, args.pdf_directory)
 
     logging.info("Finished deduplicating PDFs.")

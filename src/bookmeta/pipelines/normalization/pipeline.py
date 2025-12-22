@@ -11,12 +11,13 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Iterable
 
+from bookmeta.services.bookinfo import Provider
 import joblib
 import pandas as pd
 from tqdm.auto import tqdm
 
 from bookmeta.cli.batch import _count_pdfs_with_ripgrep
-from bookmeta.cli.pipeline import _read_secrets
+from bookmeta.cli.pipeline import _client_config_for, _read_secrets
 from bookmeta.cli.utils import discover_pdfs
 from bookmeta.config.settings import DEFAULT_DB_PATH, NORMALIZE_CACHE_DIR
 from bookmeta.data.sqlite import _compute_pdf_hash
@@ -88,9 +89,10 @@ def _build_canonical_keyword_map(
     embedding_host: str,
     embedding_model: str,
     cluster_count: int | None,
-    canonical_host: str,
     canonical_model: str,
     canonical_temperature: float,
+    canonical_provider: Provider = "ollama",
+    canonical_client_config: dict[str, Any] | None = None,
 ) -> dict[str, str]:
     embeddings = generate_keyword_embeddings(
         cleaned_keywords,
@@ -107,10 +109,12 @@ def _build_canonical_keyword_map(
     LOGGER.info(f"Computed {clusters['cluster_id'].nunique()} keyword clusters")
     LOGGER.info(clusters.head())
 
+    client_config = canonical_client_config
     canonical_clusters = assign_canonical_keywords_per_cluster(
         clusters,
-        ollama_host=canonical_host,
-        ollama_model=canonical_model,
+        provider=canonical_provider,
+        client_config=client_config,
+        model=canonical_model,
         temperature=canonical_temperature,
         workers=workers,
     )
@@ -168,9 +172,10 @@ def _normalize_keywords_pipeline_cached(
     embedding_host: str,
     embedding_model: str,
     cluster_count: int | None = None,
-    canonical_host: str,
     canonical_model: str,
     canonical_temperature: float = 0.01,
+    canonical_provider: Provider = "ollama",
+    canonical_client_config: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     """Load keywords from the DB, cluster them, and assign canonical labels."""
 
@@ -196,9 +201,10 @@ def _normalize_keywords_pipeline_cached(
         embedding_host=embedding_host,
         embedding_model=embedding_model,
         cluster_count=cluster_count,
-        canonical_host=canonical_host,
         canonical_model=canonical_model,
         canonical_temperature=canonical_temperature,
+        canonical_provider=canonical_provider,
+        canonical_client_config=canonical_client_config,
     )
 
     return _apply_canonical_keyword_map(df, keyword_to_clean_map, clean_to_canonical)
@@ -211,9 +217,10 @@ def normalize_keywords_pipeline(
     embedding_host: str,
     embedding_model: str,
     cluster_count: int | None = None,
-    canonical_host: str,
     canonical_model: str,
     canonical_temperature: float = 0.0,
+    canonical_provider: Provider = "ollama",
+    canonical_client_config: dict[str, Any] | None = None,
     write_to_disk: bool = False,
 ) -> pd.DataFrame:
     df = _normalize_keywords_pipeline_cached(
@@ -222,9 +229,10 @@ def normalize_keywords_pipeline(
         embedding_host=embedding_host,
         embedding_model=embedding_model,
         cluster_count=cluster_count,
-        canonical_host=canonical_host,
         canonical_model=canonical_model,
         canonical_temperature=canonical_temperature,
+        canonical_provider=canonical_provider,
+        canonical_client_config=canonical_client_config,
     )
     LOGGER.info("Applied Keyword Normalization")
     LOGGER.info(df.columns)
@@ -470,7 +478,8 @@ def run_metadata_writer(
     embedding_model: str,
     canonical_model: str,
     embedding_host: str,
-    canonical_host: str,
+    canonical_provider: Provider = "ollama",
+    canonical_client_config: dict[str, Any] | None = None,
 ) -> None:
     LOGGER.info(f"Normalizing metadata from {db_path}")
     df = normalize_keywords_pipeline(
@@ -481,7 +490,8 @@ def run_metadata_writer(
         embedding_model=embedding_model,
         canonical_model=canonical_model,
         embedding_host=embedding_host,
-        canonical_host=canonical_host,
+        canonical_provider=canonical_provider,
+        canonical_client_config=canonical_client_config,
     )
     df = attach_book_metadata_payloads(df)
     df = attach_canonical_publishers(df)
@@ -556,7 +566,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--log-level",
-        default="INFO",
+        default="ERROR",
         help="Logging level (DEBUG, INFO, WARNING, ERROR).",
     )
     parser.add_argument(
@@ -576,6 +586,12 @@ def main() -> None:
         help="Model ID used to choose canonical keywords.",
     )
     parser.add_argument(
+        "--canonical-provider",
+        choices=["ollama", "openai"],
+        default="ollama",
+        help="LLM provider used to choose canonical keywords.",
+    )
+    parser.add_argument(
         "--writer-bin",
         type=Path,
         default=None,
@@ -588,7 +604,8 @@ def main() -> None:
     logging.getLogger("httpx").setLevel(logging.WARNING)
 
     secrets = _read_secrets(args.secrets)
-    ollama_host = secrets.get("OLLAMA_HOST", "http://192.168.1.31:11434")
+    ollama_host = secrets["OLLAMA_HOST"]
+    canonical_client_config = _client_config_for(args.canonical_provider, secrets)
 
     run_metadata_writer(
         db_path=args.db_path,
@@ -599,7 +616,8 @@ def main() -> None:
         embedding_model=args.embedding_model,
         canonical_model=args.canonical_model,
         embedding_host=ollama_host,
-        canonical_host=ollama_host,
+        canonical_provider=args.canonical_provider,
+        canonical_client_config=canonical_client_config,
     )
 
 

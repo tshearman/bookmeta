@@ -6,10 +6,16 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
 from pathlib import Path
 from typing import Any, Iterator
+import numpy
 
 from tqdm.auto import tqdm
 
-from bookmeta.cli.pipeline import _read_secrets, build_pipeline_config, process_pdf
+from bookmeta.cli.pipeline import (
+    _expand_paths,
+    _read_secrets,
+    build_pipeline_config,
+    process_pdf,
+)
 from bookmeta.cli.utils import discover_pdfs
 from bookmeta.config.settings import DEFAULT_DB_PATH
 from bookmeta.data.sqlite import _compute_pdf_hash
@@ -53,9 +59,10 @@ def parse_args() -> argparse.Namespace:
         description="Process all PDFs within a directory and produce refined book metadata."
     )
     parser.add_argument(
-        "pdf_directory",
+        "pdf_directories",
+        nargs="+",
         type=Path,
-        help="Root directory to scan recursively for PDFs.",
+        help="Root directory/directories to scan recursively for PDFs (globs allowed).",
     )
     parser.add_argument(
         "--secrets",
@@ -144,48 +151,68 @@ def main() -> dict[str, Any]:
     secrets = _read_secrets(args.secrets)
     config = build_pipeline_config(args, secrets)
 
-    logging.info(f"Discovering pdfs in {args.pdf_directory}")
-    total_pdfs = _count_pdfs_with_ripgrep(args.pdf_directory)
-    logging.info(f"Found {total_pdfs} PDFs via ripgrep.")
+    pdf_dirs = _expand_paths(args.pdf_directories)
+    if not pdf_dirs:
+        raise FileNotFoundError("No directories matched the provided arguments.")
 
-    pdf_iter = discover_pdfs(args.pdf_directory)
-    limited_pdf_iter = (
+    # total_pdfs = 0
+    # for pdf_dir in pdf_dirs:
+    #     if not pdf_dir.exists():
+    #         raise FileNotFoundError(f"PDF directory does not exist: {pdf_dir}")
+    #     if not pdf_dir.is_dir():
+    #         raise RuntimeError(f"PDF directory is not a directory: {pdf_dir}")
+    #     logging.info(f"Counting pdfs in {pdf_dir}")
+    #     total_pdfs += _count_pdfs_with_ripgrep(pdf_dir)
+    # logging.info(f"Found {total_pdfs} PDFs via ripgrep across {len(pdf_dirs)} roots.")
+
+    pdf_iter = list((pdf for pdf_dir in pdf_dirs for pdf in discover_pdfs(pdf_dir)))
+    pdf_iter = pdf_iter[1000:]
+    total_pdfs = len(pdf_iter)
+    logging.info(f"Num of pdfs in process list: {len(pdf_iter)}")
+
+    limited_pdf_iter = list(
         islice(pdf_iter, args.max_pdfs) if args.max_pdfs is not None else pdf_iter
     )
+    logging.info(f"Num of pdfs in limited process list: {len(limited_pdf_iter)}")
 
     workers = max(1, args.workers)
     processed: dict[str, Any] = {}
     failed: dict[str, str] = {}
 
     logging.info(f"Processing with {workers} workers.")
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(process_pdf, pdf, config, args.results_db): pdf
-            for pdf in limited_pdf_iter
-        }
-        progress_total = (
-            total_pdfs if args.max_pdfs is None else min(total_pdfs, args.max_pdfs)
-        )
-        with tqdm(total=progress_total, desc="Processing PDFs", unit="pdf") as progress:
-            for future in as_completed(futures):
-                pdf = futures[future]
-                pdf_hash = _compute_pdf_hash(pdf)
-                try:
-                    result = future.result()
-                    if result is None:
-                        logging.info(
-                            f"No metadata produced for {pdf}; nothing persisted."
-                        )
-                        continue
-                    processed[pdf_hash] = {
-                        "input": str(pdf),
-                        "output": result.model_dump(),
-                    }
-                except Exception as exc:
-                    logging.exception(f"Pipeline failed for {pdf}")
-                    failed[pdf_hash] = str(exc)
-                finally:
-                    progress.update(1)
+    chunks = numpy.array_split(pdf_iter, 100)
+    for n, chunk in enumerate(chunks):
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = {
+                executor.submit(process_pdf, pdf, config, args.results_db): pdf
+                for pdf in chunk
+            }
+            progress_total = (
+                total_pdfs if args.max_pdfs is None else min(total_pdfs, args.max_pdfs)
+            )
+            with tqdm(
+                total=progress_total, desc="Processing PDFs", unit="pdf"
+            ) as progress:
+                for future in as_completed(futures):
+                    pdf = futures[future]
+                    pdf_hash = _compute_pdf_hash(pdf)
+                    try:
+                        result = future.result()
+                        if result is None:
+                            logging.info(
+                                f"No metadata produced for {pdf}; nothing persisted."
+                            )
+                            continue
+                        processed[pdf_hash] = {
+                            "input": str(pdf),
+                            "output": result.model_dump(),
+                        }
+                    except Exception as exc:
+                        logging.exception(f"Pipeline failed for {pdf}")
+                        failed[pdf_hash] = str(exc)
+                    finally:
+                        progress.update(1)
+        print(f"Processed chunk {n} / {len(chunks)}")
 
     summary = {"processed": processed, "failed": failed}
     return summary

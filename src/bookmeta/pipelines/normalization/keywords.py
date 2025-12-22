@@ -10,6 +10,7 @@ import joblib
 import numpy as np
 import ollama
 import pandas as pd
+from openai import OpenAI
 from cleantext import clean
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.utils import validation as sk_validation
@@ -17,6 +18,11 @@ from tqdm.auto import tqdm
 
 from bookmeta.config.settings import CACHE_ROOT, DEFAULT_DB_PATH
 from bookmeta.data.sqlite import _ensure_db
+from bookmeta.services.bookinfo import Provider
+from bookmeta.services.llm import (
+    cached_ollama_chat,
+    cached_openapi_response_text,
+)
 
 LOGGER = logging.getLogger(__name__)
 EMBEDDING_CACHE = joblib.Memory(CACHE_ROOT / "embedding", verbose=0)
@@ -158,9 +164,10 @@ def generate_keyword_embeddings(
 def canonicalize_keyword_group(
     keywords: list[str],
     *,
-    ollama_host: str = "http://192.168.1.31:11434",
-    ollama_model: str = "qwen2.5vl:32b",
+    provider: Provider = "ollama",
+    model: str = "qwen2.5vl:32b",
     temperature: float = 0.0,
+    client_config: dict[str, Any] | None = None,
 ) -> str | None:
     if not keywords:
         raise ValueError("keywords must be a non-empty collection of strings.")
@@ -184,16 +191,33 @@ def canonicalize_keyword_group(
         f"KEYWORDS:\n{keyword_list}"
     )
 
-    client = ollama.Client(host=ollama_host)
-    response = client.chat(
-        model=ollama_model,
-        messages=[
-            {"role": "system", "content": canonical_keyword_system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        options={"temperature": temperature},
-    )
-    result = response["message"]["content"].strip()
+    config = client_config or {}
+    messages = [
+        {"role": "system", "content": canonical_keyword_system_prompt},
+        {"role": "user", "content": user_prompt},
+    ]
+
+    if provider == "ollama":
+        config = config or {"host": "http://192.168.1.31:11434"}
+        client = ollama.Client(**config)
+        response = cached_ollama_chat(
+            model=model,
+            messages=messages,
+            client=client,
+            options={"temperature": temperature},
+        )
+        result = response["message"]["content"].strip()
+    elif provider == "openai":
+        client = OpenAI(**config)
+        result = cached_openapi_response_text(
+            model=model,
+            input=messages,
+            client=client,
+            temperature=temperature,
+        ).strip()
+    else:
+        raise ValueError(f"Unsupported provider for canonical keywords: {provider}")
+
     try:
         return result.splitlines()[0].strip().strip('"')
     except:
@@ -203,8 +227,9 @@ def canonicalize_keyword_group(
 def assign_canonical_keywords_per_cluster(
     clusters: pd.DataFrame,
     *,
-    ollama_host: str = "http://192.168.1.31:11434",
-    ollama_model: str = "qwen2.5vl:32b",
+    provider: Provider = "ollama",
+    client_config: dict[str, Any] | None = None,
+    model: str = "qwen2.5vl:32b",
     temperature: float = 0.0,
     workers: int = 4,
 ) -> pd.DataFrame:
@@ -212,6 +237,9 @@ def assign_canonical_keywords_per_cluster(
     grouped = list(clusters.groupby("cluster_id", sort=True))
     workers = max(1, workers)
     mapping: dict[int, str | None] = {}
+    effective_client_config = client_config
+    if provider == "ollama" and effective_client_config is None:
+        effective_client_config = {"host": "http://192.168.1.31:11434"}
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures: dict[Any, int] = {}
@@ -230,9 +258,10 @@ def assign_canonical_keywords_per_cluster(
                 future = executor.submit(
                     canonicalize_keyword_group,
                     keywords,
-                    ollama_host=ollama_host,
-                    ollama_model=ollama_model,
+                    provider=provider,
+                    model=model,
                     temperature=temperature,
+                    client_config=effective_client_config,
                 )
                 futures[future] = cluster_id  # type: ignore
 
