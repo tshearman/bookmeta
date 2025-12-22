@@ -113,9 +113,7 @@ def _dedupe_pdfs(
                 unique.append(pdf)
                 continue
             if signature in seen:
-                logging.info(
-                    "Duplicate detected: %s (matches %s)", pdf, seen[signature]
-                )
+                logging.info(f"Duplicates detected:\n\t{pdf}\n\t {seen[signature]})")
                 duplicates.append(pdf)
             else:
                 seen[signature] = pdf
