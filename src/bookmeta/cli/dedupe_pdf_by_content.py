@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="Root directory to scan recursively for PDFs.",
     )
-    group = parser.add_mutually_exclusive_group(required=True)
+    group = parser.add_mutually_exclusive_group(required=False)
     group.add_argument(
         "--dest",
         type=Path,
@@ -59,12 +59,6 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def _normalize_text(text: Optional[str]) -> str:
-    if not text:
-        return ""
-    return " ".join(text.split()).strip().lower()
-
-
 def _page_image_digest(page) -> str:
     hasher = hashlib.sha256()
     try:
@@ -86,8 +80,8 @@ def _pdf_signature(path: Path) -> Tuple[int, str, str, str, str]:
     page_count = len(reader.pages)
     first_page = reader.pages[0]
     last_page = reader.pages[-1]
-    first_text = _normalize_text(first_page.extract_text() or "")
-    last_text = _normalize_text(last_page.extract_text() or "")
+    first_text = first_page.extract_text() or ""
+    last_text = last_page.extract_text() or ""
     first_images = _page_image_digest(first_page)
     last_images = _page_image_digest(last_page)
     return page_count, first_text, first_images, last_text, last_images
@@ -128,7 +122,9 @@ def _dedupe_pdfs(
                 unique.append(pdf)
                 continue
             if signature in seen:
-                logging.info("Duplicate detected: %s (matches %s)", pdf, seen[signature])
+                logging.info(
+                    "Duplicate detected: %s (matches %s)", pdf, seen[signature]
+                )
                 duplicates.append(pdf)
             else:
                 seen[signature] = pdf
