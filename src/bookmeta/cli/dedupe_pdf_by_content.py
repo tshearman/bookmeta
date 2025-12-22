@@ -189,7 +189,7 @@ def main() -> int:
 
     if args.rm:
         _remove_duplicates(duplicates)
-    else:
+    elif args.dest:
         _move_duplicates(duplicates, args.dest, args.pdf_directory)
 
     logging.info("Finished deduplicating PDFs.")
