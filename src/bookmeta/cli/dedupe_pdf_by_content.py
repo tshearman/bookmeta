@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Deduplicate PDFs by comparing first page text, last page text, and page count.
+Deduplicate PDFs by comparing rasterized first/last pages and page count.
 
 Usage:
     python dedupe_pdf_by_content.py /path/to/pdfs --dest /tmp/duplicates
@@ -16,13 +16,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
-from PyPDF2 import PdfReader
+import fitz  # PyMuPDF
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Detect duplicate PDFs by page count plus first/last page text and "
+            "Detect duplicate PDFs by page count plus rasterized first/last pages and "
             "either remove them or move them into a destination directory."
         )
     )
@@ -59,37 +59,28 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def _page_image_digest(page) -> str:
+def _page_digest(doc: fitz.Document, page_index: int) -> str:
+    """Render a page to pixels and hash the raw samples plus dimensions."""
+    page = doc.load_page(page_index)
+    pix = page.get_pixmap(alpha=False)
     hasher = hashlib.sha256()
-    try:
-        images = getattr(page, "images", []) or []
-        for image in images:
-            data = getattr(image, "data", b"") or b""
-            width = getattr(image, "width", None)
-            height = getattr(image, "height", None)
-            if width is not None and height is not None:
-                hasher.update(f"{width}x{height}".encode())
-            hasher.update(data)
-    except Exception as exc:
-        logging.debug("Failed to hash images for page: %s", exc)
+    hasher.update(f"{pix.width}x{pix.height}x{pix.n}".encode())
+    hasher.update(pix.samples)
     return hasher.hexdigest()
 
 
-def _pdf_signature(path: Path) -> Tuple[int, str, str, str, str]:
-    reader = PdfReader(str(path))
-    page_count = len(reader.pages)
-    first_page = reader.pages[0]
-    last_page = reader.pages[-1]
-    first_text = first_page.extract_text() or ""
-    last_text = last_page.extract_text() or ""
-    first_images = _page_image_digest(first_page)
-    last_images = _page_image_digest(last_page)
-    return page_count, first_text, first_images, last_text, last_images
+def _pdf_signature(path: Path) -> Tuple[int, str, str]:
+    with fitz.open(path) as doc:
+        page_count = doc.page_count
+        first_digest = _page_digest(doc, 0)
+        last_index = max(page_count - 1, 0)
+        last_digest = _page_digest(doc, last_index)
+        return page_count, first_digest, last_digest
 
 
 def _hash_pdf_by_content(
     path: Path,
-) -> Tuple[Path, Optional[Tuple[int, str, str, str, str]]]:
+) -> Tuple[Path, Optional[Tuple[int, str, str]]]:
     try:
         return path, _pdf_signature(path)
     except Exception as exc:
@@ -111,7 +102,7 @@ def _dedupe_pdfs(
     log_interval: int = 25,
     workers: int,
 ) -> Tuple[list[Path], list[Path]]:
-    seen: dict[Tuple[int, str, str, str, str], Path] = {}
+    seen: dict[Tuple[int, str, str], Path] = {}
     unique: list[Path] = []
     duplicates: list[Path] = []
     processed = 0
