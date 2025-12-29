@@ -256,6 +256,14 @@ def build_pipeline_config(
         num_first_ocr_pages=args.context_first_ocr_pages,
         num_last_ocr_pages=args.context_last_ocr_pages,
     )
+    LOGGER.debug(
+        "Configured context limits: first_images=%s last_images=%s "
+        "first_ocr_pages=%s last_ocr_pages=%s",
+        context_limits.num_first_images,
+        context_limits.num_last_images,
+        context_limits.num_first_ocr_pages,
+        context_limits.num_last_ocr_pages,
+    )
 
     ocr_methods = [native_ocr_method, tesseract_ocr_method]
     if args.ocr_ollama_model is not None:
@@ -278,9 +286,9 @@ def build_pipeline_config(
         model=args.selection_model,
         context_limits=context_limits,
     )
-    methods = _default_booksearch_methods(args, secrets)
+    search_methods = _default_booksearch_methods(args, secrets)
     booksearch_config = BookSearchPipelineConfig(
-        search_methods=methods, num_responses=args.search_max_results
+        search_methods=search_methods, num_responses=args.search_max_results
     )
     mode = "bookinfo_only" if args.pipeline_mode == "bookinfo-only" else "full"
 
@@ -300,6 +308,7 @@ def _full_pipeline(config: PipelineConfig) -> BookMetaPipeline:
     selection_pipeline = generate_selection_pipeline(config.selection_config)
 
     def _inner_(pdf_path: Path) -> DetailedBookInfo:
+        LOGGER.info(f"\n\nFULL PIPELINE::::::::::::::::::\n\t{str(pdf_path)}\n")
         ocr_results = ocr_pipeline(pdf_path)
         if not _has_ocr_text(ocr_results):
             LOGGER.warning(f"Skipping {pdf_path} because OCR produced no text.")
@@ -317,6 +326,9 @@ def bookinfo_only_pipeline(config: PipelineConfig) -> BookMetaPipeline:
     info_pipeline = generate_bookinfo_pipeline(config.extraction_config)
 
     def _inner_(pdf_path: Path) -> DetailedBookInfo:
+        LOGGER.info(
+            f"\n\nBOOKINFO ONLY PIPELINE::::::::::::::::::\n\t{str(pdf_path)}\n"
+        )
         ocr_results = ocr_pipeline(pdf_path)
         if not _has_ocr_text(ocr_results):
             LOGGER.warning(f"Skipping {pdf_path} because OCR produced no text.")
@@ -325,17 +337,7 @@ def bookinfo_only_pipeline(config: PipelineConfig) -> BookMetaPipeline:
         if info_response is None:
             raise RuntimeError(f"BookInfo extraction returned no result for {pdf_path}")
         # Promote BookInfoResponse to DetailedBookInfo shape for signature parity.
-        info = info_response.info
-        return DetailedBookInfo(
-            author=info.author,
-            title=info.title,
-            subtitle=None,
-            publisher=None,
-            subject=None,
-            keywords=info.keywords,
-            isbn_identifiers=None,
-            description=info.description,
-        )
+        return info_response.info.as_detailed_book_info()
 
     return _inner_
 

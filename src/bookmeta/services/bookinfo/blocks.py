@@ -1,3 +1,4 @@
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,9 @@ class ContextLimits:
     num_last_images: int | None = None
     num_first_ocr_pages: int | None = None
     num_last_ocr_pages: int | None = None
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def construct_blocks(
@@ -46,7 +50,20 @@ def construct_blocks(
             "text": "PDF METADATA\n" + "\n".join(metadata_lines),
         }
 
-    for img in pdf_result.images(limits.num_first_images, limits.num_last_images):
+    selected_images = pdf_result.images(limits.num_first_images, limits.num_last_images)
+    selected_ocr = pdf_result.ocr_results(
+        limits.num_first_ocr_pages, limits.num_last_ocr_pages
+    )
+    LOGGER.info(
+        "Context limits applied: %s | selected %s images out of %s pages and %s OCR entries across %s pages",
+        limits,
+        len(selected_images),
+        len(pdf_result.pages),
+        len(selected_ocr),
+        len({entry.page_number for entry in selected_ocr}),
+    )
+
+    for img in selected_images:
         blocks["images"].append(
             {
                 "type": "input_image",
@@ -54,9 +71,7 @@ def construct_blocks(
             }
         )
 
-    for ocr in pdf_result.ocr_results(
-        limits.num_first_ocr_pages, limits.num_last_ocr_pages
-    ):
+    for ocr in selected_ocr:
         text = ocr.ocr_result.text or ""
         blocks["ocr"].append(
             {
