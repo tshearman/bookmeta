@@ -16,10 +16,6 @@ methods. Using only information visible in these sources:
 • Provide confidence values between 0 and 1 for title_confidence and
   author_confidence, where 0 means very uncertain / likely wrong and 1 means
   certain.
-• If present, also extract:
-  - publisher name
-  - subject/category (e.g. “Fiction”, “Role Playing Games”, etc.)
-  - any ISBN identifiers (10 or 13 digits) and list them in `isbn_identifiers`
 • Populate the keywords field with a list of strings, up to but no more
   than 8. These should be keywords that describe information about the book
   like genre, subject, if its a game, and other high-level metadata
@@ -29,6 +25,28 @@ methods. Using only information visible in these sources:
 
 Return your best guess for any field you can see. If a field is not visible or
 uncertain, set it to null (and confidence near 0). Do NOT invent information.
+"""
+
+BOOK_PROMPT_TTRPG = """
+You are analyzing pages from a tabletop role-playing game (TTRPG) product
+(front cover, back cover, and interior samples) plus OCR transcripts.
+Use only visible/provided text; never hallucinate.
+
+Priorities:
+• Extract the book's title and primary author/primary designer.
+• Provide confidence values between 0 and 1 for title_confidence and author_confidence.
+• Identify if the product is a core rulebook, adventure/module, supplement, setting,
+  bestiary/monster book, player guide, GM guide, or other clear subtype.
+• Capture edition/version info (e.g., "5e", "2nd Edition", "Pathfinder 2e", "OSR").
+• If present, capture the game system or compatibility tag (e.g., "D&D 5e", "Mothership",
+  "System Neutral", "Forged in the Dark", "Year Zero", "Powered by the Apocalypse").
+• Populate keywords (max 8) that reflect genre/setting (fantasy, sci-fi, horror, cyberpunk,
+  post-apocalyptic), tone (grimdark, heroic), format (zine, hardcover), and notable mechanics.
+• Provide a concise description summarizing visible text (blurb, module hook, setting flavor).
+
+Guidance:
+• Prefer information printed on covers, title pages, and colophons; corroborate with OCR excerpts.
+• If uncertain, return null and keep confidence near 0 rather than guessing.
 """
 
 BookInfoRequestPipeline = Callable[[PdfOcrResults], BookInfoResponse]

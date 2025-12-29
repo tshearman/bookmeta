@@ -16,6 +16,7 @@ from bookmeta.cli.pipeline import (
     build_pipeline_config,
     process_pdf,
 )
+from bookmeta.services.bookinfo import BOOK_PROMPT, BOOK_PROMPT_TTRPG
 from bookmeta.cli.utils import discover_pdfs
 from bookmeta.config.settings import DEFAULT_DB_PATH
 from bookmeta.data.sqlite import _compute_pdf_hash
@@ -139,9 +140,54 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional cap on the number of PDFs to process after discovery.",
     )
+    parser.add_argument(
+        "--context-first-images",
+        type=int,
+        default=None,
+        help="Number of first page images to include in BookInfo/selection context (default: all).",
+    )
+    parser.add_argument(
+        "--context-last-images",
+        type=int,
+        default=None,
+        help="Number of last page images to include in BookInfo/selection context (default: all).",
+    )
+    parser.add_argument(
+        "--context-first-ocr-pages",
+        type=int,
+        default=None,
+        help="Number of first OCR pages to include in BookInfo/selection context (default: all).",
+    )
+    parser.add_argument(
+        "--context-last-ocr-pages",
+        type=int,
+        default=None,
+        help="Number of last OCR pages to include in BookInfo/selection context (default: all).",
+    )
+    parser.add_argument(
+        "--book-prompt",
+        choices=("default", "ttrpg"),
+        default="default",
+        help="BookInfo prompt variant to use (default or ttrpg-focused).",
+    )
+    parser.add_argument(
+        "--pipeline-mode",
+        choices=("full", "bookinfo-only"),
+        default="full",
+        help="Choose full pipeline (with search/selection) or bookinfo-only.",
+    )
     args = parser.parse_args()
-    if args.max_pdfs is not None and args.max_pdfs <= 0:
-        parser.error("--max-pdfs must be a positive integer.")
+
+    for name in (
+        "context_first_images",
+        "context_last_images",
+        "context_first_ocr_pages",
+        "context_last_ocr_pages",
+        "max_pdfs",
+    ):
+        value = getattr(args, name)
+        if value is not None and value < 0:
+            parser.error(f"--{name.replace('_', '-')} must be non-negative.")
     return args
 
 

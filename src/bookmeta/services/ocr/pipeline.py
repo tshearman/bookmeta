@@ -55,15 +55,15 @@ def pdf_ocr_pipeline(
 ) -> PdfOcrResults:
     source_path = Path(pdf_path)
     metadata = load_pdf_metadata(source_path)
-    ocr_results: list[OCRedPage] = []
+    pages: list[OCRedPage] = []
 
     with fitz.open(source_path) as doc:
         page_indices = sample_page_indices(doc, num_first_pages, num_last_pages)
         methods = tuple(ocr_methods) if ocr_methods else DEFAULT_OCR_METHODS
-        ocr_results = list(map(process_page(doc, methods), page_indices))
-    combined_text = build_combined_ocr_text(ocr_results)
+        pages = list(map(process_page(doc, methods), page_indices))
+    combined_text = build_combined_ocr_text(pages)
 
-    return PdfOcrResults(pdf_path, combined_text, metadata, ocr_results)  # type: ignore
+    return PdfOcrResults(pdf_path, combined_text, metadata, pages)  # type: ignore
 
 
 def generate_pipeline(config: OcrPipelineConfig) -> OcrPipeline:
