@@ -29,8 +29,9 @@ uncertain, set it to null (and confidence near 0). Do NOT invent information.
 """
 
 BOOK_PROMPT_TTRPG = """
-You are analyzing pages from a tabletop role-playing game (TTRPG) product
-(front cover, back cover, and interior samples) plus OCR transcripts.
+You are analyzing pages from a tabletop role-playing game (TTRPG) product.
+The image is the front over and there are imperfect OCR transcripts of a few 
+pages of a book (front cover, back cover, and early interior pages).
 Use only visible/provided text; never hallucinate.
 
 Priorities:

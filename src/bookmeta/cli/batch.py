@@ -2,11 +2,11 @@ import argparse
 import logging
 import os
 import subprocess
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
 from pathlib import Path
-from typing import Any, Iterator
-import numpy
+from typing import Any
 
 from tqdm.auto import tqdm
 
@@ -16,10 +16,16 @@ from bookmeta.cli.pipeline import (
     build_pipeline_config,
     process_pdf,
 )
-from bookmeta.services.bookinfo import BOOK_PROMPT, BOOK_PROMPT_TTRPG
 from bookmeta.cli.utils import discover_pdfs
 from bookmeta.config.settings import DEFAULT_DB_PATH
 from bookmeta.data.sqlite import _compute_pdf_hash
+
+warnings.filterwarnings(
+    "ignore",
+    message="Persisting input arguments took",
+    category=UserWarning,
+    module="joblib.memory",
+)
 
 
 def _count_pdfs_with_ripgrep(pdf_directory: Path) -> int:
@@ -212,6 +218,11 @@ def main() -> dict[str, Any]:
     if not pdf_dirs:
         raise FileNotFoundError("No directories matched the provided arguments.")
 
+    total_pdfs = sum(_count_pdfs_with_ripgrep(pdf_dir) for pdf_dir in pdf_dirs)
+    progress_total = total_pdfs
+    if args.max_pdfs is not None:
+        progress_total = min(progress_total, args.max_pdfs)
+
     pdf_iter = (pdf for pdf_dir in pdf_dirs for pdf in discover_pdfs(pdf_dir))
     limited_pdf_iter = (
         islice(pdf_iter, args.max_pdfs) if args.max_pdfs is not None else pdf_iter
@@ -224,38 +235,33 @@ def main() -> dict[str, Any]:
     chunk_size = args.chunk_size
     logging.info(f"Processing with {workers} workers in batches of size {chunk_size}.")
     chunks = chunked_iter(limited_pdf_iter, chunk_size)
-    for n, chunk in enumerate(chunks):
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(process_pdf, pdf, config, args.results_db): pdf
-                for pdf in chunk
-            }
-            # progress_total = (
-            #     total_pdfs if args.max_pdfs is None else min(total_pdfs, args.max_pdfs)
-            # )
-            # with tqdm(
-            #     total=progress_total, desc="Processing PDFs", unit="pdf"
-            # ) as progress:
-            for future in as_completed(futures):
-                pdf = futures[future]
-                pdf_hash = _compute_pdf_hash(pdf)
-                try:
-                    result = future.result()
-                    if result is None:
-                        logging.info(
-                            f"No metadata produced for {pdf}; nothing persisted."
-                        )
-                        continue
-                    processed[pdf_hash] = {
-                        "input": str(pdf),
-                        "output": result.model_dump(),
-                    }
-                except Exception as exc:
-                    logging.exception(f"Pipeline failed for {pdf}")
-                    failed[pdf_hash] = str(exc)
-                # finally:
-                #     progress.update(1)
-        print(f"Processed chunk {n}")
+    with tqdm(total=progress_total, desc="Processing PDFs", unit="pdf") as progress:
+        for n, chunk in enumerate(chunks):
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {
+                    executor.submit(process_pdf, pdf, config, args.results_db): pdf
+                    for pdf in chunk
+                }
+                for future in as_completed(futures):
+                    pdf = futures[future]
+                    pdf_hash = _compute_pdf_hash(pdf)
+                    try:
+                        result = future.result()
+                        if result is None:
+                            logging.info(
+                                f"No metadata produced for {pdf}; nothing persisted."
+                            )
+                            continue
+                        processed[pdf_hash] = {
+                            "input": str(pdf),
+                            "output": result.model_dump(),
+                        }
+                    except Exception as exc:
+                        logging.exception(f"Pipeline failed for {pdf}")
+                        failed[pdf_hash] = str(exc)
+                    finally:
+                        progress.update(1)
+            print(f"Processed chunk {n}")
 
     summary = {"processed": processed, "failed": failed}
     return summary

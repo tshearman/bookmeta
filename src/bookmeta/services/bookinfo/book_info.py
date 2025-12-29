@@ -1,4 +1,12 @@
+import re
+
 from pydantic import BaseModel
+
+
+def split_authors(author_text: str) -> list[str]:
+    """Split a free-form author string on commas and the word 'and'."""
+    parts = re.split(r",\s*|\band\b", author_text, flags=re.IGNORECASE)
+    return [p.strip() for p in parts if p.strip()]
 
 
 class BookInfo(BaseModel):
@@ -13,9 +21,13 @@ class BookInfo(BaseModel):
         if self.author is None:
             authors = None
         else:
-            authors = [a.strip() for a in self.author.split(",") if a.strip()]
-            if len(authors) == 1:
-                authors = authors[0]
+            split = split_authors(self.author)
+            if len(split) == 0:
+                authors = None
+            elif len(split) == 1:
+                authors = split[0]
+            else:
+                authors = split
 
         return DetailedBookInfo(
             author=authors,
