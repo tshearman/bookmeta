@@ -3,13 +3,15 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable, Iterable, Literal
 
 import joblib
 import ollama
 
 from bookmeta.config.settings import DEFAULT_DB_PATH, PIPELINE_CACHE_DIR
 from bookmeta.data.sqlite import persist_run, serialize_pipeline_config
+from bookmeta.services.bookinfo import BOOK_PROMPT, BOOK_PROMPT_TTRPG
+from bookmeta.services.bookinfo.blocks import ContextLimits
 from bookmeta.services.bookinfo.book_info import DetailedBookInfo
 from bookmeta.services.bookinfo.pipeline import (
     BookInfoPipelineConfig,
@@ -52,6 +54,7 @@ class PipelineConfig:
     extraction_config: BookInfoPipelineConfig
     selection_config: BookInfoSelectionPipelineConfig
     booksearch_config: BookSearchPipelineConfig
+    mode: Literal["full", "bookinfo_only"] = "full"
 
 
 class NoOcrTextError(RuntimeError):
@@ -127,6 +130,30 @@ def parse_args() -> argparse.Namespace:
         help="Maximum Book Search results to fetch during book search.",
     )
     parser.add_argument(
+        "--context-first-images",
+        type=int,
+        default=None,
+        help="Number of first page images to include in BookInfo/selection context (default: all).",
+    )
+    parser.add_argument(
+        "--context-last-images",
+        type=int,
+        default=None,
+        help="Number of last page images to include in BookInfo/selection context (default: all).",
+    )
+    parser.add_argument(
+        "--context-first-ocr-pages",
+        type=int,
+        default=None,
+        help="Number of first OCR pages to include in BookInfo/selection context (default: all).",
+    )
+    parser.add_argument(
+        "--context-last-ocr-pages",
+        type=int,
+        default=None,
+        help="Number of last OCR pages to include in BookInfo/selection context (default: all).",
+    )
+    parser.add_argument(
         "--results-db",
         type=Path,
         default=DEFAULT_DB_PATH,
@@ -137,7 +164,29 @@ def parse_args() -> argparse.Namespace:
         default="ERROR",
         help="Logging level (DEBUG, INFO, WARN, ERROR).",
     )
-    return parser.parse_args()
+    parser.add_argument(
+        "--book-prompt",
+        choices=("default", "ttrpg"),
+        default="default",
+        help="BookInfo prompt variant to use (default or ttrpg-focused).",
+    )
+    parser.add_argument(
+        "--pipeline-mode",
+        choices=("full", "bookinfo-only"),
+        default="full",
+        help="Choose full pipeline (with search/selection) or bookinfo-only.",
+    )
+    args = parser.parse_args()
+    for name in (
+        "context_first_images",
+        "context_last_images",
+        "context_first_ocr_pages",
+        "context_last_ocr_pages",
+    ):
+        value = getattr(args, name)
+        if value is not None and value < 0:
+            parser.error(f"--{name.replace('_', '-')} must be non-negative.")
+    return args
 
 
 def _read_secrets(path: Path) -> dict[str, Any]:
@@ -162,8 +211,7 @@ def _has_ocr_text(ocr_results: PdfOcrResults) -> bool:
     combined = (ocr_results.combined_text or "").strip()
     if combined:
         return True
-    pages = ocr_results.ocr_results
-    for page in pages:
+    for page in ocr_results.pages:
         for result in page.ocr_results:
             text = result.text
             if text and text.strip():
@@ -201,6 +249,22 @@ def build_pipeline_config(
     args: argparse.Namespace, secrets: dict[str, Any]
 ) -> PipelineConfig:
 
+    prompt = BOOK_PROMPT_TTRPG if args.book_prompt == "ttrpg" else BOOK_PROMPT
+    context_limits = ContextLimits(
+        num_first_images=args.context_first_images,
+        num_last_images=args.context_last_images,
+        num_first_ocr_pages=args.context_first_ocr_pages,
+        num_last_ocr_pages=args.context_last_ocr_pages,
+    )
+    LOGGER.debug(
+        "Configured context limits: first_images=%s last_images=%s "
+        "first_ocr_pages=%s last_ocr_pages=%s",
+        context_limits.num_first_images,
+        context_limits.num_last_images,
+        context_limits.num_first_ocr_pages,
+        context_limits.num_last_ocr_pages,
+    )
+
     ocr_methods = [native_ocr_method, tesseract_ocr_method]
     if args.ocr_ollama_model is not None:
         llm_ocr = ollama_ocr_method(
@@ -213,32 +277,38 @@ def build_pipeline_config(
         provider=args.extraction_provider,
         client_config=_client_config_for(args.extraction_provider, secrets),
         model=args.extraction_model,
+        context_limits=context_limits,
+        prompt=prompt,
     )
     selection_config = BookInfoSelectionPipelineConfig(
         provider=args.selection_provider,
         client_config=_client_config_for(args.selection_provider, secrets),
         model=args.selection_model,
+        context_limits=context_limits,
     )
-    methods = _default_booksearch_methods(args, secrets)
+    search_methods = _default_booksearch_methods(args, secrets)
     booksearch_config = BookSearchPipelineConfig(
-        search_methods=methods, num_responses=args.search_max_results
+        search_methods=search_methods, num_responses=args.search_max_results
     )
+    mode = "bookinfo_only" if args.pipeline_mode == "bookinfo-only" else "full"
 
     return PipelineConfig(
         ocr_config=ocr_config,
         extraction_config=extraction_config,
         selection_config=selection_config,
         booksearch_config=booksearch_config,
+        mode=mode,
     )
 
 
-def pipeline(config: PipelineConfig) -> BookMetaPipeline:
+def _full_pipeline(config: PipelineConfig) -> BookMetaPipeline:
     ocr_pipeline = generate_ocr_pipeline(config.ocr_config)
     info_pipeline = generate_bookinfo_pipeline(config.extraction_config)
     search_pipeline = generate_booksearch_pipeline(config.booksearch_config)
     selection_pipeline = generate_selection_pipeline(config.selection_config)
 
     def _inner_(pdf_path: Path) -> DetailedBookInfo:
+        LOGGER.info(f"\n\nFULL PIPELINE::::::::::::::::::\n\t{str(pdf_path)}\n")
         ocr_results = ocr_pipeline(pdf_path)
         if not _has_ocr_text(ocr_results):
             LOGGER.warning(f"Skipping {pdf_path} because OCR produced no text.")
@@ -247,6 +317,36 @@ def pipeline(config: PipelineConfig) -> BookMetaPipeline:
         return selection_pipeline(ocr_results, search_results)
 
     return _inner_
+
+
+def bookinfo_only_pipeline(config: PipelineConfig) -> BookMetaPipeline:
+    """Simplified pipeline that stops after OCR + BookInfo extraction."""
+
+    ocr_pipeline = generate_ocr_pipeline(config.ocr_config)
+    info_pipeline = generate_bookinfo_pipeline(config.extraction_config)
+
+    def _inner_(pdf_path: Path) -> DetailedBookInfo:
+        LOGGER.info(
+            f"\n\nBOOKINFO ONLY PIPELINE::::::::::::::::::\n\t{str(pdf_path)}\n"
+        )
+        ocr_results = ocr_pipeline(pdf_path)
+        if not _has_ocr_text(ocr_results):
+            LOGGER.warning(f"Skipping {pdf_path} because OCR produced no text.")
+            raise NoOcrTextError(f"No OCR text extracted for {pdf_path}")
+        info_response = info_pipeline(ocr_results)
+        if info_response is None:
+            raise RuntimeError(f"BookInfo extraction returned no result for {pdf_path}")
+        # Promote BookInfoResponse to DetailedBookInfo shape for signature parity.
+        return info_response.info.as_detailed_book_info()
+
+    return _inner_
+
+
+def pipeline(config: PipelineConfig) -> BookMetaPipeline:
+    """Return the configured pipeline (full or bookinfo-only)."""
+    if config.mode == "bookinfo_only":
+        return bookinfo_only_pipeline(config)
+    return _full_pipeline(config)
 
 
 @PDF_MEMORY.cache(ignore=["config"])
@@ -293,7 +393,7 @@ def _expand_paths(patterns: Iterable[Path]) -> list[Path]:
     return expanded
 
 
-def main() -> DetailedBookInfo | None:
+def main() -> list[DetailedBookInfo]:
     args = parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO))
     secrets = _read_secrets(args.secrets)
@@ -302,13 +402,14 @@ def main() -> DetailedBookInfo | None:
     if not pdf_paths:
         raise FileNotFoundError("No PDF paths matched the provided arguments.")
 
-    last_result: DetailedBookInfo | None = None
+    results: list[DetailedBookInfo] = []
     for pdf_path in pdf_paths:
-        last_result = process_pdf(pdf_path, config, args.results_db)
-    return last_result
+        result = process_pdf(pdf_path, config, args.results_db)
+        if result is not None:
+            print(json.dumps(result.model_dump(), indent=2))
+            results.append(result)
+    return results
 
 
 if __name__ == "__main__":
     out = main()
-    if out is not None:
-        print(json.dumps(out.model_dump(), indent=2))

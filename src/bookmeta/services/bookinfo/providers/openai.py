@@ -4,11 +4,11 @@ from openai import OpenAI
 
 from bookmeta.services.bookinfo import BOOK_PROMPT, BookInfoRequestPipeline
 from bookmeta.services.bookinfo.blocks import (
+    ContextLimits,
     construct_blocks,
     get_img_blocks,
     get_text_blocks,
 )
-from bookmeta.services.bookinfo.book_info import BookInfo
 from bookmeta.services.bookinfo.book_info_response import BookInfoResponse
 from bookmeta.services.llm import cached_openapi_response_parsed
 from bookmeta.services.ocr.pdf_ocr_results import PdfOcrResults
@@ -26,10 +26,12 @@ def blocks_to_openai_context(blocks: dict[str, Any]):
     return [{"role": "user", "content": all_blocks}]
 
 
-def openai_bookinfo_request(client: OpenAI, model: str) -> BookInfoRequestPipeline:
+def openai_bookinfo_request(
+    client: OpenAI, model: str, prompt: str, context_limits: ContextLimits | None
+) -> BookInfoRequestPipeline:
 
     def run(input: PdfOcrResults) -> BookInfoResponse | None:
-        blocks = construct_blocks(input, BOOK_PROMPT)
+        blocks = construct_blocks(input, prompt, limits=context_limits)
         context = blocks_to_openai_context(blocks)
         return cached_openapi_response_parsed(
             model, context, client, text_format=BookInfoResponse

@@ -15,13 +15,15 @@ from .. import (
 
 
 def openai_selection_runner(
-    client: openai.OpenAI, model: str
+    client: openai.OpenAI, model: str, context_limits
 ) -> BookInfoSelectionPipeline:
     def run(
         pdf_results: PdfOcrResults,
         candidates: Sequence[BookSearchCandidate],
     ) -> DetailedBookInfo | None:
-        blocks, text_blocks = build_blocks_with_candidates(pdf_results, candidates)
+        blocks, text_blocks = build_blocks_with_candidates(
+            pdf_results, candidates, limits=context_limits
+        )
         img_blocks = [parse_img_block(b) for b in get_img_blocks(blocks)]
         context = [{"role": "user", "content": text_blocks + img_blocks}]
         return cached_openapi_response_parsed(

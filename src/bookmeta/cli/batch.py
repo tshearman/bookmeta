@@ -2,11 +2,11 @@ import argparse
 import logging
 import os
 import subprocess
+import warnings
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from itertools import islice
 from pathlib import Path
-from typing import Any, Iterator
-import numpy
+from typing import Any
 
 from tqdm.auto import tqdm
 
@@ -19,6 +19,13 @@ from bookmeta.cli.pipeline import (
 from bookmeta.cli.utils import discover_pdfs
 from bookmeta.config.settings import DEFAULT_DB_PATH
 from bookmeta.data.sqlite import _compute_pdf_hash
+
+warnings.filterwarnings(
+    "ignore",
+    message="Persisting input arguments took",
+    category=UserWarning,
+    module="joblib.memory",
+)
 
 
 def _count_pdfs_with_ripgrep(pdf_directory: Path) -> int:
@@ -139,10 +146,66 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Optional cap on the number of PDFs to process after discovery.",
     )
+    parser.add_argument(
+        "--context-first-images",
+        type=int,
+        default=None,
+        help="Number of first page images to include in BookInfo/selection context (default: all).",
+    )
+    parser.add_argument(
+        "--context-last-images",
+        type=int,
+        default=None,
+        help="Number of last page images to include in BookInfo/selection context (default: all).",
+    )
+    parser.add_argument(
+        "--context-first-ocr-pages",
+        type=int,
+        default=None,
+        help="Number of first OCR pages to include in BookInfo/selection context (default: all).",
+    )
+    parser.add_argument(
+        "--context-last-ocr-pages",
+        type=int,
+        default=None,
+        help="Number of last OCR pages to include in BookInfo/selection context (default: all).",
+    )
+    parser.add_argument(
+        "--book-prompt",
+        choices=("default", "ttrpg"),
+        default="default",
+        help="BookInfo prompt variant to use (default or ttrpg-focused).",
+    )
+    parser.add_argument(
+        "--pipeline-mode",
+        choices=("full", "bookinfo-only"),
+        default="full",
+        help="Choose full pipeline (with search/selection) or bookinfo-only.",
+    )
+    parser.add_argument(
+        "--chunk-size", type=int, default=1000, help="Size of each batch"
+    )
     args = parser.parse_args()
-    if args.max_pdfs is not None and args.max_pdfs <= 0:
-        parser.error("--max-pdfs must be a positive integer.")
+
+    for name in (
+        "context_first_images",
+        "context_last_images",
+        "context_first_ocr_pages",
+        "context_last_ocr_pages",
+        "max_pdfs",
+    ):
+        value = getattr(args, name)
+        if value is not None and value < 0:
+            parser.error(f"--{name.replace('_', '-')} must be non-negative.")
     return args
+
+
+def chunked_iter(iterable, size):
+    while True:
+        chunk = list(islice(iterable, size))
+        if not chunk:
+            break
+        yield chunk
 
 
 def main() -> dict[str, Any]:
@@ -155,33 +218,30 @@ def main() -> dict[str, Any]:
     if not pdf_dirs:
         raise FileNotFoundError("No directories matched the provided arguments.")
 
-    pdf_iter = list((pdf for pdf_dir in pdf_dirs for pdf in discover_pdfs(pdf_dir)))
-    total_pdfs = len(pdf_iter)
-    logging.info(f"Num of pdfs in process list: {len(pdf_iter)}")
+    total_pdfs = sum(_count_pdfs_with_ripgrep(pdf_dir) for pdf_dir in pdf_dirs)
+    progress_total = total_pdfs
+    if args.max_pdfs is not None:
+        progress_total = min(progress_total, args.max_pdfs)
 
-    limited_pdf_iter = list(
+    pdf_iter = (pdf for pdf_dir in pdf_dirs for pdf in discover_pdfs(pdf_dir))
+    limited_pdf_iter = (
         islice(pdf_iter, args.max_pdfs) if args.max_pdfs is not None else pdf_iter
     )
-    logging.info(f"Num of pdfs in limited process list: {len(limited_pdf_iter)}")
 
     workers = max(1, args.workers)
     processed: dict[str, Any] = {}
     failed: dict[str, str] = {}
 
-    logging.info(f"Processing with {workers} workers.")
-    chunks = numpy.array_split(pdf_iter, 100)  # type: ignore
-    for n, chunk in enumerate(chunks):
-        with ThreadPoolExecutor(max_workers=workers) as executor:
-            futures = {
-                executor.submit(process_pdf, pdf, config, args.results_db): pdf
-                for pdf in chunk
-            }
-            progress_total = (
-                total_pdfs if args.max_pdfs is None else min(total_pdfs, args.max_pdfs)
-            )
-            with tqdm(
-                total=progress_total, desc="Processing PDFs", unit="pdf"
-            ) as progress:
+    chunk_size = args.chunk_size
+    logging.info(f"Processing with {workers} workers in batches of size {chunk_size}.")
+    chunks = chunked_iter(limited_pdf_iter, chunk_size)
+    with tqdm(total=progress_total, desc="Processing PDFs", unit="pdf") as progress:
+        for n, chunk in enumerate(chunks):
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {
+                    executor.submit(process_pdf, pdf, config, args.results_db): pdf
+                    for pdf in chunk
+                }
                 for future in as_completed(futures):
                     pdf = futures[future]
                     pdf_hash = _compute_pdf_hash(pdf)
@@ -201,7 +261,7 @@ def main() -> dict[str, Any]:
                         failed[pdf_hash] = str(exc)
                     finally:
                         progress.update(1)
-        print(f"Processed chunk {n} / {len(chunks)}")
+            print(f"Processed chunk {n}")
 
     summary = {"processed": processed, "failed": failed}
     return summary

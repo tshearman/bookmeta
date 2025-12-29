@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from bookmeta.services.bookinfo import BookInfoRequestPipeline
 from bookmeta.services.bookinfo.blocks import (
+    ContextLimits,
     construct_blocks,
     get_img_blocks,
     get_text_blocks,
@@ -86,7 +87,7 @@ def strip_code_fences(payload: str) -> str:
 
 
 def ollama_bookinfo_request(
-    client: ollama.Client, model: str
+    client: ollama.Client, model: str, prompt: str, context_limits: ContextLimits | None
 ) -> BookInfoRequestPipeline:
 
     def summary_to_response(summary: SimplifiedBookInfoSummary) -> BookInfoResponse:
@@ -103,7 +104,7 @@ def ollama_bookinfo_request(
         return BookInfoResponse(info=info, confidence=confidence)
 
     def run(input: PdfOcrResults) -> BookInfoResponse | None:
-        blocks = construct_blocks(input, prompt=OLLAMA_TITLE_AUTHOR_PROMPT)
+        blocks = construct_blocks(input, prompt=prompt, limits=context_limits)
         messages = blocks_to_ollama_messages(blocks)
         response = cached_ollama_chat(model, messages, client)
         response_content = response["message"]["content"]

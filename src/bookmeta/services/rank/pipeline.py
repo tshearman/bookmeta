@@ -8,6 +8,7 @@ from openai import OpenAI
 from pydantic import Field
 
 from ..bookinfo import DEFAULT_OLLAMA_MODEL, DEFAULT_OPENAI_MODEL, Provider
+from ..bookinfo.blocks import ContextLimits
 from ..bookinfo.book_info import DetailedBookInfo
 from ..booksearch.pipeline import BookSearchResults
 from ..ocr.pdf_ocr_results import PdfOcrResults
@@ -21,6 +22,7 @@ class BookInfoSelectionPipelineConfig:
     provider: Provider
     client_config: dict[str, Any] = Field(default_factory=dict)
     model: str | None = None
+    context_limits: ContextLimits | None = None
 
 
 def search_results_to_candidates(
@@ -52,11 +54,11 @@ def generate_selection_pipeline(
     if config.provider == "openai":
         client = OpenAI(**config.client_config)
         model = config.model or DEFAULT_OPENAI_MODEL
-        return forked(openai_selection_runner(client, model))
+        return forked(openai_selection_runner(client, model, config.context_limits))
 
     if config.provider == "ollama":
         client = ollama.Client(**config.client_config)
         model = config.model or DEFAULT_OLLAMA_MODEL
-        return forked(ollama_selection_runner(client, model))
+        return forked(ollama_selection_runner(client, model, config.context_limits))
 
     raise ValueError(f"Unsupported provider: {config.provider}")

@@ -17,12 +17,15 @@ from .. import (
 def ollama_selection_runner(
     client: ollama.Client,
     model: str,
+    context_limits,
 ) -> BookInfoSelectionPipeline:
     def run(
         pdf_results: PdfOcrResults,
         candidates: Sequence[BookSearchCandidate],
     ) -> DetailedBookInfo | None:
-        blocks, text_blocks = build_blocks_with_candidates(pdf_results, candidates)
+        blocks, text_blocks = build_blocks_with_candidates(
+            pdf_results, candidates, limits=context_limits
+        )
         content = "\n\n".join(block["text"] for block in text_blocks)
         messages = [
             ollama.Message(

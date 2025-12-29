@@ -1,7 +1,7 @@
 import json
 from typing import Any, Callable, Sequence, Union
 
-from bookmeta.services.bookinfo.blocks import construct_blocks
+from bookmeta.services.bookinfo.blocks import ContextLimits, construct_blocks
 from bookmeta.services.bookinfo.blocks import get_text_blocks as bookinfo_text_blocks
 from bookmeta.services.bookinfo.book_info import BookInfo, DetailedBookInfo
 from bookmeta.services.booksearch.pipeline import BookSearchResults
@@ -57,8 +57,9 @@ def format_candidates(candidates: Sequence[BookSearchCandidate]) -> str:
 def build_blocks_with_candidates(
     pdf_results: PdfOcrResults,
     candidates: Sequence[BookSearchCandidate],
+    limits: ContextLimits | None = None,
 ):
-    blocks = construct_blocks(pdf_results, BOOK_SELECTION_PROMPT)
+    blocks = construct_blocks(pdf_results, BOOK_SELECTION_PROMPT, limits=limits)
     text_blocks = bookinfo_text_blocks(blocks)
     text_blocks.append(
         {
