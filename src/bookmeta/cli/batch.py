@@ -155,18 +155,7 @@ def main() -> dict[str, Any]:
     if not pdf_dirs:
         raise FileNotFoundError("No directories matched the provided arguments.")
 
-    # total_pdfs = 0
-    # for pdf_dir in pdf_dirs:
-    #     if not pdf_dir.exists():
-    #         raise FileNotFoundError(f"PDF directory does not exist: {pdf_dir}")
-    #     if not pdf_dir.is_dir():
-    #         raise RuntimeError(f"PDF directory is not a directory: {pdf_dir}")
-    #     logging.info(f"Counting pdfs in {pdf_dir}")
-    #     total_pdfs += _count_pdfs_with_ripgrep(pdf_dir)
-    # logging.info(f"Found {total_pdfs} PDFs via ripgrep across {len(pdf_dirs)} roots.")
-
     pdf_iter = list((pdf for pdf_dir in pdf_dirs for pdf in discover_pdfs(pdf_dir)))
-    pdf_iter = pdf_iter[1000:]
     total_pdfs = len(pdf_iter)
     logging.info(f"Num of pdfs in process list: {len(pdf_iter)}")
 
@@ -180,7 +169,7 @@ def main() -> dict[str, Any]:
     failed: dict[str, str] = {}
 
     logging.info(f"Processing with {workers} workers.")
-    chunks = numpy.array_split(pdf_iter, 100)
+    chunks = numpy.array_split(pdf_iter, 100)  # type: ignore
     for n, chunk in enumerate(chunks):
         with ThreadPoolExecutor(max_workers=workers) as executor:
             futures = {
