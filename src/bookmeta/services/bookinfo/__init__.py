@@ -4,7 +4,7 @@ from ..ocr.pdf_ocr_results import PdfOcrResults
 from .book_info_response import BookInfoResponse
 
 Provider = Literal["ollama", "openai"]
-DEFAULT_OPENAI_MODEL = "gpt-4.1-mini"
+DEFAULT_OPENAI_MODEL = "gpt-5-mini"
 DEFAULT_OLLAMA_MODEL = "qwen2.5vl:32b"
 
 BOOK_PROMPT = """
@@ -17,6 +17,8 @@ methods. Using only information visible in these sources:
 • Provide confidence values between 0 and 1 for title_confidence and
   author_confidence, where 0 means very uncertain / likely wrong and 1 means
   certain.
+• Set `nsfw` to true if the content—especially imagery—appears sexually explicit;
+  otherwise set it to false.
 • Populate the keywords field with a list of strings, up to but no more
   than 8. These should be keywords that describe information about the book
   like genre, subject, if its a game, and other high-level metadata
@@ -42,6 +44,8 @@ Priorities:
 • Capture edition/version info (e.g., "5e", "2nd Edition", "Pathfinder 2e", "OSR").
 • If present, capture the game system or compatibility tag (e.g., "D&D 5e", "Mothership",
   "System Neutral", "Forged in the Dark", "Year Zero", "Powered by the Apocalypse").
+• Set `nsfw` to true if the content—especially imagery—appears sexually explicit;
+  otherwise set it to false.
 • Populate keywords (max 8) that reflect genre/setting (fantasy, sci-fi, horror, cyberpunk,
   post-apocalyptic), tone (grimdark, heroic), format (zine, hardcover), and notable mechanics.
 • Provide a concise description summarizing visible text (blurb, module hook, setting flavor).

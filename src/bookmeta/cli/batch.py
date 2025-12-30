@@ -15,6 +15,7 @@ from bookmeta.cli.pipeline import (
     _read_secrets,
     build_pipeline_config,
     process_pdf,
+    run_bookinfo_only_pipeline,
 )
 from bookmeta.cli.utils import discover_pdfs
 from bookmeta.config.settings import DEFAULT_DB_PATH
@@ -185,6 +186,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--chunk-size", type=int, default=1000, help="Size of each batch"
     )
+    parser.add_argument(
+        "--queue-size",
+        type=int,
+        default=16,
+        help="Max items buffered per pipeline stage (bookinfo-only mode).",
+    )
+    parser.add_argument(
+        "--ocr-workers",
+        type=int,
+        default=max(1, (os.cpu_count() or 4)),
+        help="Worker threads for OCR stage (bookinfo-only mode).",
+    )
+    parser.add_argument(
+        "--bookinfo-workers",
+        type=int,
+        default=None,
+        help="Worker threads for BookInfo stage (bookinfo-only mode). Defaults to ocr-workers.",
+    )
+    parser.add_argument(
+        "--result-workers",
+        type=int,
+        default=None,
+        help="Worker threads for result stage (bookinfo-only mode). Defaults to ocr-workers.",
+    )
     args = parser.parse_args()
 
     for name in (
@@ -193,6 +218,10 @@ def parse_args() -> argparse.Namespace:
         "context_first_ocr_pages",
         "context_last_ocr_pages",
         "max_pdfs",
+        "queue_size",
+        "ocr_workers",
+        "bookinfo_workers",
+        "result_workers",
     ):
         value = getattr(args, name)
         if value is not None and value < 0:
@@ -218,23 +247,52 @@ def main() -> dict[str, Any]:
     if not pdf_dirs:
         raise FileNotFoundError("No directories matched the provided arguments.")
 
-    total_pdfs = sum(_count_pdfs_with_ripgrep(pdf_dir) for pdf_dir in pdf_dirs)
-    progress_total = total_pdfs
-    if args.max_pdfs is not None:
-        progress_total = min(progress_total, args.max_pdfs)
-
+    total_discovered = sum(_count_pdfs_with_ripgrep(pdf_dir) for pdf_dir in pdf_dirs)
     pdf_iter = (pdf for pdf_dir in pdf_dirs for pdf in discover_pdfs(pdf_dir))
     limited_pdf_iter = (
         islice(pdf_iter, args.max_pdfs) if args.max_pdfs is not None else pdf_iter
+    )
+    progress_total = (
+        min(total_discovered, args.max_pdfs) if args.max_pdfs is not None else total_discovered
     )
 
     workers = max(1, args.workers)
     processed: dict[str, Any] = {}
     failed: dict[str, str] = {}
 
+    if config.mode == "bookinfo_only":
+        logging.info("Running staged bookinfo-only pipeline")
+        with tqdm(total=progress_total, desc="Processing PDFs", unit="pdf") as progress:
+
+            def _progress_callback(done: int, total: int) -> None:
+                progress.n = done
+                progress.refresh()
+
+            results = run_bookinfo_only_pipeline(
+                limited_pdf_iter,
+                config,
+                args.results_db,
+                progress_callback=_progress_callback,
+                total_expected=progress_total,
+                enqueue_limit=args.max_pdfs,
+                dedupe=True,
+            )
+        for result in results:
+            pdf_hash = _compute_pdf_hash(result.pdf_path)
+            if result.failure:
+                failed[pdf_hash] = result.failure.error
+                continue
+            if result.detailed:
+                processed[pdf_hash] = {
+                    "input": str(result.pdf_path),
+                    "output": result.detailed.model_dump(),
+                }
+        summary = {"processed": processed, "failed": failed}
+        return summary
+
     chunk_size = args.chunk_size
     logging.info(f"Processing with {workers} workers in batches of size {chunk_size}.")
-    chunks = chunked_iter(limited_pdf_iter, chunk_size)
+    chunks = chunked_iter(pdf_list, chunk_size)
     with tqdm(total=progress_total, desc="Processing PDFs", unit="pdf") as progress:
         for n, chunk in enumerate(chunks):
             with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -268,4 +326,4 @@ def main() -> dict[str, Any]:
 
 
 if __name__ == "__main__":
-    output = main()
+    main()

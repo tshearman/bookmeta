@@ -27,6 +27,7 @@ class SimplifiedBookInfoSummary(BaseModel):
     description: str | None = None
     title_confidence: float | None = None
     author_confidence: float | None = None
+    nsfw: bool | None = None
 
 
 OLLAMA_TITLE_AUTHOR_PROMPT = """
@@ -40,7 +41,8 @@ Return ONLY a JSON object matching this schema:
     "keywords": ["keyword1", "keyword2"] or null,
     "description": "<brief summary using visible text>" or null,
     "title_confidence": <0-1 confidence in the title>,
-    "author_confidence": <0-1 confidence in the author>
+    "author_confidence": <0-1 confidence in the author>,
+    "nsfw": <true if the content/imagery is sexually explicit, else false>
 }
 
 Guidance:
@@ -50,6 +52,7 @@ Guidance:
 - "description" a concise transcription/summary of the readable text you
   can infer from the images and OCR excerpts (do not just echo the provided OCR
   but use the provided OCR as context).
+- "nsfw" should be true only if the book content, especially imagery, is sexually explicit.
 - If a field cannot be confirmed, set it to null and set the corresponding confidence near 0.
 - Do not add any text outside the JSON. Do not wrap the JSON in code fences.
 """
@@ -96,6 +99,7 @@ def ollama_bookinfo_request(
             title=summary.title,
             keywords=summary.keywords,
             description=summary.description,
+            nsfw=bool(summary.nsfw) if summary.nsfw is not None else False,
         )
         confidence = BookInfoConfidence(
             author_confidence=summary.author_confidence or 0.0,

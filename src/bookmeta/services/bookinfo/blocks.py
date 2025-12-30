@@ -54,7 +54,7 @@ def construct_blocks(
     selected_ocr = pdf_result.ocr_results(
         limits.num_first_ocr_pages, limits.num_last_ocr_pages
     )
-    LOGGER.info(
+    LOGGER.debug(
         "Context limits applied: %s | selected %s images out of %s pages and %s OCR entries across %s pages",
         limits,
         len(selected_images),

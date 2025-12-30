@@ -16,6 +16,7 @@ class BookInfo(BaseModel):
     publisher: str | None = None
     keywords: list[str] | None = None
     description: str | None = None
+    nsfw: bool = False
 
     def as_detailed_book_info(self) -> "DetailedBookInfo":
         if self.author is None:
@@ -38,6 +39,7 @@ class BookInfo(BaseModel):
             keywords=self.keywords,
             isbn_identifiers=None,
             description=self.description,
+            nsfw=self.nsfw,
         )
 
 
@@ -50,3 +52,4 @@ class DetailedBookInfo(BaseModel):
     keywords: list[str] | None = None
     isbn_identifiers: list[str] | None = None
     description: str | None = None
+    nsfw: bool = False

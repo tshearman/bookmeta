@@ -71,14 +71,14 @@ def _flatten_keywords(keyword_sets: Iterable[Iterable[str]]) -> list[str]:
 
 def _collect_cleaned_keywords(df: pd.DataFrame) -> tuple[dict[str, str], list[str]]:
     all_keywords = _flatten_keywords(df["keywords"])
-    LOGGER.info(f"Discovered {len(all_keywords)} raw keywords")
+    LOGGER.debug(f"Discovered {len(all_keywords)} raw keywords")
     keyword_to_clean = {keyword: normalize_keyword(keyword) for keyword in all_keywords}
     cleaned_keywords = sorted(
         list([kw for kw in dict.fromkeys(keyword_to_clean.values()) if kw])
     )
-    LOGGER.info(f"Normalized to {len(cleaned_keywords)} unique keywords")
+    LOGGER.debug(f"Normalized to {len(cleaned_keywords)} unique keywords")
     for kw in cleaned_keywords[:100]:
-        LOGGER.info(f"\t{kw}")
+        LOGGER.debug(f"\t{kw}")
     return keyword_to_clean, cleaned_keywords
 
 
@@ -100,14 +100,14 @@ def _build_canonical_keyword_map(
         host=embedding_host,
         model=embedding_model,
     )
-    LOGGER.info(f"Generated {len(embeddings)} embeddings")
+    LOGGER.debug(f"Generated {len(embeddings)} embeddings")
 
     clusters = agglomerative_cluster_keywords(
         embeddings,
         n_clusters=cluster_count,
     )
-    LOGGER.info(f"Computed {clusters['cluster_id'].nunique()} keyword clusters")
-    LOGGER.info(clusters.head())
+    LOGGER.debug(f"Computed {clusters['cluster_id'].nunique()} keyword clusters")
+    LOGGER.debug(clusters.head())
 
     client_config = canonical_client_config
     canonical_clusters = assign_canonical_keywords_per_cluster(
