@@ -1,7 +1,12 @@
-DEFAULT_NUM_FIRST_PAGES = 5
-DEFAULT_NUM_LAST_PAGES = 3
+from pathlib import Path
+
+
+DEFAULT_NUM_FIRST_PAGES = 4
+DEFAULT_NUM_LAST_PAGES = 2
 
 MAX_LONG_EDGE_IMG = 1600
+MAX_REQUESTS_PER_BATCH = 50_000
+MAX_BATCH_BYTES = 128 * 1024 * 1024
 
 TTRPG_OCR_LLM_PROMPT = """
 You are an OCR assistant reading high-resolution images of 
@@ -32,3 +37,8 @@ Do not add commentary or interpretation—only capture what is visible.
 Return the final Markdown document so downstream tools can understand 
 both the text content and layout structure.
 """
+
+MAX_REQUESTS_PER_BATCH = 50_000
+MAX_BATCH_BYTES = 100 * 1024 * 1024
+
+SECRETS_PATH = Path("")

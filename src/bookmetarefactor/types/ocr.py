@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from typing import Callable, Iterable
-from bookmetarefactor.types import Page, PageNumber, Pdf
+from bookmetarefactor.types import Page, PageNumber
 
 
 type OcrMethodName = str
@@ -14,17 +14,16 @@ class OcrMethod:
 
 
 @dataclass(frozen=True)
-class OcrResult:
+class OcrTask:
     page: Page
-    method_name: OcrMethodName
-    output: OcrOutput
+    page_number: PageNumber
+    method: OcrMethod
 
 
 @dataclass(frozen=True)
-class OcrTask:
-    pdf: Pdf
-    page_number: PageNumber
-    method: OcrMethod
+class OcrResult:
+    task: OcrTask
+    output: OcrOutput
 
 
 type OcrResults = list[OcrResult]
